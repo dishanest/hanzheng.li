@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Han Zheng</title>
+<meta name="description" content="Han Zheng. Software and photography.">
+<style>
+  :root { --bg:#faf8f4; --fg:#1c1b19; --muted:#6f6b63; --accent:#b4532a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161513; --fg:#ece8e0; --muted:#9a958b; --accent:#e08a5f; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 18px/1.6 ui-serif, Georgia, "Times New Roman", serif;
+    display: grid; place-items: center; padding: 24px;
+  }
+  main { max-width: 32rem; width: 100%; }
+  h1 { font-size: clamp(2.4rem, 8vw, 3.6rem); font-weight: 600; letter-spacing: -0.02em; margin: 0 0 .4rem; }
+  p { color: var(--muted); margin: 0 0 1.6rem; }
+  nav { display: flex; gap: 1.4rem; flex-wrap: wrap; font-family: ui-sans-serif, system-ui, sans-serif; font-size: .95rem; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+  a:hover, a:focus-visible { border-color: currentColor; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Han Zheng</h1>
+  <p>Software and photography. A proper site is coming.</p>
+  <nav>
+    <a href="mailto:me@hanzheng.li">me@hanzheng.li</a>
+    <a href="https://github.com/dishanest">GitHub</a>
+  </nav>
+</main>
+</body>
+</html>

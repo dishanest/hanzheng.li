@@ -1,0 +1,150 @@
+{
+  "r1": {
+    "name": "HP5 Plus - developed 2025-01-27",
+    "camera": "Olympus OM-1",
+    "film": "Ilford HP5 Plus",
+    "year": 2025
+  },
+  "r2": {
+    "name": "Scan batch 00056206",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Portra 400",
+    "year": 2024
+  },
+  "r3": {
+    "name": "HP5 Plus - developed 2025-01-14",
+    "camera": "Olympus OM-1",
+    "film": "Ilford HP5 Plus",
+    "year": 2025
+  },
+  "r4": {
+    "name": "Ilford 400 - lab order 90866",
+    "camera": "Olympus OM-1",
+    "film": "Ilford HP5 Plus",
+    "year": 2025
+  },
+  "r5": {
+    "name": "Portra 400 - developed 2024-09-16",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "year": 2024
+  },
+  "r6": {
+    "name": "Kodak 400 - lab order 95343",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "year": 2025
+  },
+  "r7": {
+    "name": "Portra 400 - developed 2024-12-02",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "year": 2024
+  },
+  "r8": {
+    "name": "Scan batch 00014935",
+    "camera": "Olympus OM-1",
+    "film": "Ilford HP5 Plus",
+    "year": 2024
+  },
+  "r9": {
+    "name": "Portra 400 - developed 2025-04-22",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Portra 400",
+    "year": 2025
+  },
+  "r10": {
+    "name": "CineStill 800T - developed 2024-12-02",
+    "camera": "Contax G2",
+    "film": "CineStill 800T",
+    "year": 2024
+  },
+  "r11": {
+    "name": "Kodak 400 - lab order 113101",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "year": 2025
+  },
+  "r12": {
+    "name": "Kodak 400 - lab order 100802",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "year": 2025
+  },
+  "r13": {
+    "name": "Kodak 400 - lab order 115243",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "year": 2025
+  },
+  "r14": {
+    "name": "Scan batch 00013034",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Porta 400",
+    "year": 2024
+  },
+  "r15": {
+    "name": "Scan batch 00013002",
+    "camera": "Lomography Fisheye 2",
+    "film": "Reflx Lab 800T",
+    "year": 2024
+  },
+  "r16": {
+    "name": "Kodak 800 - lab order 131809",
+    "camera": "Olympus OM-4Ti",
+    "film": "Kodak Portra 800",
+    "year": 2026
+  },
+  "r17": {
+    "name": "Portra 800 - developed 2024-09-16",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 800",
+    "year": 2024
+  },
+  "r18": {
+    "name": "Scan batch 18719601",
+    "camera": "Canon AF35M",
+    "film": "Fujifilm Superia X-TRA 400",
+    "year": 2022
+  },
+  "r19": {
+    "name": "Kodak 400 - lab order 93321",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "year": 2025
+  },
+  "r20": {
+    "name": "Kodak 400 - lab order 98199",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Portra 400",
+    "year": 2025
+  },
+  "r21": {
+    "name": "New roll 21",
+    "camera": "Canon AF35M",
+    "film": "Kodak UltraMax 400",
+    "place": "",
+    "year": 2023
+  },
+  "r22": {
+    "name": "New roll 22",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Portra 400",
+    "place": "",
+    "year": 2024
+  },
+  "r23": {
+    "name": "New roll 23",
+    "camera": "Fuji Tiara Zoom",
+    "film": "Kodak Portra 400",
+    "place": "",
+    "year": 2023
+  },
+  "r24": {
+    "name": "New roll 24",
+    "camera": "Olympus OM-1",
+    "film": "Kodak UltraMax 400",
+    "place": "",
+    "year": 2023
+  }
+}

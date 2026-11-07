@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rolls</title>
+    <style>
+      :root { color-scheme: light; }
+      body { margin: 0; font: 14px/1.4 -apple-system, system-ui, sans-serif; background: #f6f6f4; color: #111; }
+      header { position: sticky; top: 0; z-index: 2; background: #f6f6f4; padding: 12px 20px; border-bottom: 1px solid #ddd; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+      header h1 { font-size: 16px; margin: 0; }
+      header p { margin: 0; color: #666; flex: 1 1 380px; }
+      header a { color: inherit; }
+      #status { color: #666; }
+      button { font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+      #save { font-weight: 600; border: 0; background: #111; color: #fff; }
+      #save:disabled { background: #bbb; cursor: default; }
+      main { padding: 16px 20px 60px; display: grid; gap: 16px; }
+      #unsorted { position: sticky; top: 64px; z-index: 1; }
+      .rolls { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 430px), 1fr)); gap: 16px; }
+      .bucket { background: #fff; border: 1px solid #e3e3e0; border-radius: 8px; padding: 10px; }
+      #unsorted .bucket { background: #fffdf6; border-style: dashed; }
+      .head { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+      .head input { font: inherit; padding: 5px 7px; border: 1px solid #ccc; border-radius: 5px; min-width: 0; }
+      .head input[name=name] { grid-column: 1 / -1; font-weight: 600; }
+      .head .row { grid-column: 1 / -1; display: flex; justify-content: space-between; color: #888; font-size: 12px; }
+      .head .row button { padding: 2px 8px; font-size: 12px; }
+      .drop { min-height: 104px; display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; border-radius: 6px; background: #f2f2ef; }
+      .drop.over { outline: 2px solid #111; background: #e9e9e4; }
+      figure { margin: 0; width: 116px; display: grid; gap: 3px; }
+      .thumb { width: 116px; height: 96px; object-fit: cover; border-radius: 4px; cursor: grab; border: 2px solid transparent; box-sizing: border-box; }
+      .thumb.selected { border-color: #2a6bd3; }
+      figure input { font: 12px/1.3 inherit; font-family: inherit; padding: 3px 5px; border: 1px solid #d6d6d2; border-radius: 4px; min-width: 0; background: #fff; }
+      figure input.changed { border-color: #d39b2a; background: #fffaf0; }
+      .hint { color: #999; align-self: center; padding: 0 6px; }
+      dialog { padding: 0; border: 0; background: transparent; max-width: 96vw; }
+      dialog img { max-width: 96vw; max-height: 92vh; display: block; }
+      dialog::backdrop { background: rgb(0 0 0 / 0.8); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Rolls</h1>
+      <p>Drag photos into the roll they were shot on (Shift-click to pick several, then drag one of them). Fill in a roll's camera, film and year once; Save copies them onto every photo in it. Place is per photo, under each one. Double-click a photo to see it large. Titles and one-off details: <a href="/edit.html">photo details</a>.</p>
+      <button id="add">New roll</button>
+      <span id="status"></span>
+      <button id="save" disabled>Save</button>
+    </header>
+    <main>
+      <section id="unsorted"></section>
+      <section class="rolls" id="rolls"></section>
+    </main>
+    <dialog id="big"><img alt="" /></dialog>
+    <script type="module">
+      const { rolls, details } = await (await fetch("/__rolls")).json();
+      const members = Object.fromEntries(Object.keys(details).map((f) => [f, details[f].roll || ""]));
+      const places = Object.fromEntries(Object.keys(details).map((f) => [f, details[f].place || ""]));
+      const status = document.getElementById("status");
+      const saveBtn = document.getElementById("save");
+      let dirty = false;
+      const selected = new Set();
+      const markDirty = () => { dirty = true; saveBtn.disabled = false; status.textContent = "Unsaved changes"; status.style.color = "#b07a12"; };
+
+      function thumb(file) {
+        const img = document.createElement("img");
+        img.className = "thumb" + (selected.has(file) ? " selected" : "");
+        img.src = `/photos/${file}`;
+        img.alt = file;
+        img.title = file;
+        img.draggable = true;
+        img.addEventListener("click", (e) => {
+          if (!e.shiftKey) return;
+          selected.has(file) ? selected.delete(file) : selected.add(file);
+          img.classList.toggle("selected");
+        });
+        img.addEventListener("dblclick", () => {
+          const d = document.getElementById("big");
+          d.querySelector("img").src = `/photos/${file}`;
+          d.showModal();
+        });
+        img.addEventListener("dragstart", (e) => {
+          const files = selected.has(file) ? [...selected] : [file];
+          e.dataTransfer.setData("text/plain", JSON.stringify(files));
+          e.dataTransfer.effectAllowed = "move";
+        });
+        const fig = document.createElement("figure");
+        const place = document.createElement("input");
+        place.placeholder = "Place";
+        place.setAttribute("list", "places");
+        place.autocomplete = "off";
+        place.value = places[file];
+        place.addEventListener("input", () => {
+          places[file] = place.value;
+          place.classList.toggle("changed", place.value.trim() !== (details[file].place || ""));
+          markDirty();
+        });
+        fig.append(img, place);
+        return fig;
+      }
+
+      function dropZone(rollId) {
+        const zone = document.createElement("div");
+        zone.className = "drop";
+        const files = Object.keys(members).filter((f) => members[f] === rollId).sort();
+        files.forEach((f) => zone.append(thumb(f)));
+        if (!files.length) zone.insertAdjacentHTML("beforeend", `<span class="hint">${rollId ? "Drop photos here" : "Everything is sorted"}</span>`);
+        zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("over"); });
+        zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+        zone.addEventListener("drop", (e) => {
+          e.preventDefault();
+          zone.classList.remove("over");
+          const files = JSON.parse(e.dataTransfer.getData("text/plain") || "[]");
+          let moved = false;
+          for (const f of files) if (f in members && members[f] !== rollId) { members[f] = rollId; moved = true; }
+          selected.clear();
+          if (moved) { markDirty(); render(); }
+        });
+        return zone;
+      }
+
+      function rollCard(id) {
+        const r = rolls[id];
+        const card = document.createElement("div");
+        card.className = "bucket";
+        const count = Object.values(members).filter((m) => m === id).length;
+        card.innerHTML = `<div class="head">
+          <input name="name" placeholder="Roll name">
+          <input name="camera" placeholder="Camera" list="cameras">
+          <input name="film" placeholder="Film stock" list="films">
+          <input name="year" placeholder="Year" inputmode="numeric" style="grid-column: 1 / -1">
+          <div class="row"><span>${count} photo${count === 1 ? "" : "s"}</span><button>Delete roll</button></div>
+        </div>`;
+        for (const k of ["name", "camera", "film", "year"]) {
+          const input = card.querySelector(`[name=${k}]`);
+          input.value = r[k] ?? "";
+          input.addEventListener("input", () => { r[k] = k === "year" ? (Number(input.value) || null) : input.value; markDirty(); });
+        }
+        card.querySelector(".row button").addEventListener("click", () => {
+          for (const f in members) if (members[f] === id) members[f] = "";
+          delete rolls[id];
+          markDirty();
+          render();
+        });
+        card.append(dropZone(id));
+        return card;
+      }
+
+      function datalists() {
+        for (const [k, id] of [["camera", "cameras"], ["film", "films"], ["place", "places"]]) {
+          const vals = new Set([...Object.values(rolls).map((r) => r[k]), ...Object.values(details).map((d) => d[k])].filter(Boolean));
+          let dl = document.getElementById(id);
+          if (!dl) { dl = document.createElement("datalist"); dl.id = id; document.body.append(dl); }
+          dl.innerHTML = [...vals].sort().map((v) => `<option value="${String(v).replace(/"/g, "&quot;")}">`).join("");
+        }
+      }
+
+      function render() {
+        const unsorted = document.getElementById("unsorted");
+        unsorted.innerHTML = "";
+        const box = document.createElement("div");
+        box.className = "bucket";
+        const n = Object.values(members).filter((m) => !m).length;
+        box.innerHTML = `<div class="head"><div class="row"><strong style="color:#111">Not on a roll yet (${n})</strong></div></div>`;
+        box.append(dropZone(""));
+        unsorted.append(box);
+        const list = document.getElementById("rolls");
+        list.innerHTML = "";
+        for (const id of Object.keys(rolls)) list.append(rollCard(id));
+        datalists();
+      }
+
+      document.getElementById("add").addEventListener("click", () => {
+        let n = Object.keys(rolls).length + 1;
+        while (rolls[`r${n}`]) n++;
+        rolls[`r${n}`] = { name: `New roll ${n}`, camera: "", film: "", place: "", year: null };
+        markDirty();
+        render();
+        document.getElementById("rolls").lastElementChild.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+
+      async function save() {
+        if (!dirty) return;
+        saveBtn.disabled = true;
+        status.textContent = "Saving..."; status.style.color = "#666";
+        const res = await fetch("/__rolls", { method: "POST", body: JSON.stringify({ rolls, members, places }) });
+        if (!res.ok) { status.textContent = `Not saved: ${await res.text()}`; status.style.color = "#a22"; saveBtn.disabled = false; return; }
+        Object.assign(details, (await res.json()).details);
+        document.querySelectorAll("figure input.changed").forEach((i) => i.classList.remove("changed"));
+        dirty = false;
+        status.textContent = "Saved"; status.style.color = "#2a7a2a";
+      }
+      saveBtn.addEventListener("click", save);
+      addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); save(); } });
+      addEventListener("beforeunload", (e) => { if (dirty) e.preventDefault(); });
+      document.getElementById("big").addEventListener("click", (e) => e.currentTarget.close());
+      render();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,402 @@
+{
+  "01.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Ilford HP5 Plus",
+    "place": "West Texas",
+    "year": 2025,
+    "roll": "r1"
+  },
+  "02.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Portra 400",
+    "place": "Brooklyn, New York",
+    "year": 2024,
+    "roll": "r2"
+  },
+  "03.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Ilford HP5 Plus",
+    "place": "West Texas",
+    "year": 2025,
+    "roll": "r3"
+  },
+  "04.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Ilford HP5 Plus",
+    "place": "New York",
+    "year": 2025,
+    "roll": "r4"
+  },
+  "05.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Iceland",
+    "year": 2024,
+    "roll": "r5"
+  },
+  "06.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Brooklyn, New York",
+    "year": 2025,
+    "roll": "r6"
+  },
+  "07.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "CDMX",
+    "year": 2024,
+    "roll": "r7"
+  },
+  "08.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Portra 400",
+    "place": "Washington",
+    "year": 2024,
+    "roll": "r22"
+  },
+  "09.jpg": {
+    "title": "",
+    "camera": "Fuji Tiara Zoom",
+    "film": "Kodak Portra 400",
+    "place": "Queens, New York",
+    "year": 2023,
+    "roll": "r23"
+  },
+  "10.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Ilford HP5 Plus",
+    "place": "New York",
+    "year": 2024,
+    "roll": "r8"
+  },
+  "11.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Portra 400",
+    "place": "New York",
+    "year": 2025,
+    "roll": "r9"
+  },
+  "12.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "CineStill 800T",
+    "place": "CDMX",
+    "year": 2024,
+    "roll": "r10"
+  },
+  "13.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Brooklyn",
+    "year": 2025,
+    "roll": "r11"
+  },
+  "14.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Brooklyn",
+    "year": 2025,
+    "roll": "r12"
+  },
+  "15.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "CDMX",
+    "year": 2024,
+    "roll": "r7"
+  },
+  "16.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Brooklyn",
+    "year": 2025,
+    "roll": "r11"
+  },
+  "17.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Kodak UltraMax 400",
+    "place": "Louisiana, Denmark",
+    "year": 2023,
+    "roll": "r24"
+  },
+  "18.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "CDMX",
+    "year": 2024,
+    "roll": "r7"
+  },
+  "19.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Kawaguchiko",
+    "year": 2025,
+    "roll": "r13"
+  },
+  "20.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Porta 400",
+    "place": "Brooklyn",
+    "year": 2024,
+    "roll": "r14"
+  },
+  "21.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "CDMX",
+    "year": 2024,
+    "roll": "r7"
+  },
+  "22.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Ilford HP5 Plus",
+    "place": "New York",
+    "year": 2025,
+    "roll": "r4"
+  },
+  "23.jpg": {
+    "title": "",
+    "camera": "Lomography Fisheye 2",
+    "film": "Reflx Lab 800T",
+    "place": "New York",
+    "year": 2024,
+    "roll": "r15"
+  },
+  "24.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Kyoto",
+    "year": 2025,
+    "roll": "r13"
+  },
+  "25.jpg": {
+    "title": "",
+    "camera": "Olympus OM-4Ti",
+    "film": "Kodak Portra 800",
+    "place": "Atchafalaya, Louisiana",
+    "year": 2026,
+    "roll": "r16"
+  },
+  "26.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Iceland",
+    "year": 2024,
+    "roll": "r5"
+  },
+  "27.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 800",
+    "place": "Amsterdam",
+    "year": 2024,
+    "roll": "r17"
+  },
+  "28.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Brooklyn",
+    "year": 2025,
+    "roll": "r11"
+  },
+  "29.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Brooklyn",
+    "year": 2025,
+    "roll": "r12"
+  },
+  "30.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Ilford HP5 Plus",
+    "place": "New York",
+    "year": 2025,
+    "roll": "r4"
+  },
+  "31.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Belgium",
+    "year": 2024,
+    "roll": "r5"
+  },
+  "32.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Taiwan",
+    "year": 2025,
+    "roll": "r13"
+  },
+  "33.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Porta 400",
+    "place": "Brooklyn",
+    "year": 2024,
+    "roll": "r14"
+  },
+  "34.jpg": {
+    "title": "",
+    "camera": "Canon AF35M",
+    "film": "Fujifilm Superia X-TRA 400",
+    "place": "Aruba",
+    "year": 2022,
+    "roll": "r18"
+  },
+  "35.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Portra 400",
+    "place": "Washington",
+    "year": 2024,
+    "roll": "r22"
+  },
+  "36.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Ilford HP5 Plus",
+    "place": "West Texas",
+    "year": 2025,
+    "roll": "r1"
+  },
+  "37.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "CDMX",
+    "year": 2024,
+    "roll": "r7"
+  },
+  "38.jpg": {
+    "title": "",
+    "camera": "Canon AF35M",
+    "film": "Fujifilm Superia X-TRA 400",
+    "place": "Aruba",
+    "year": 2022,
+    "roll": "r18"
+  },
+  "39.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "CDMX",
+    "year": 2024,
+    "roll": "r7"
+  },
+  "40.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Iceland",
+    "year": 2024,
+    "roll": "r5"
+  },
+  "41.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Mount Tamalpais, California",
+    "year": 2025,
+    "roll": "r19"
+  },
+  "42.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "CDMX",
+    "year": 2024,
+    "roll": "r7"
+  },
+  "43.jpg": {
+    "title": "",
+    "camera": "Canon AF35M",
+    "film": "Kodak UltraMax 400",
+    "place": "Colorado",
+    "year": 2023,
+    "roll": "r21"
+  },
+  "44.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "CineStill 800T",
+    "place": "CDMX",
+    "year": 2024,
+    "roll": "r10"
+  },
+  "45.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Iceland",
+    "year": 2024,
+    "roll": "r5"
+  },
+  "46.jpg": {
+    "title": "",
+    "camera": "Olympus OM-1",
+    "film": "Kodak Portra 400",
+    "place": "Norway",
+    "year": 2025,
+    "roll": "r20"
+  },
+  "47.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 800",
+    "place": "Amsterdam",
+    "year": 2024,
+    "roll": "r17"
+  },
+  "48.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Kawaguchiko",
+    "year": 2025,
+    "roll": "r13"
+  },
+  "49.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Iceland",
+    "year": 2024,
+    "roll": "r5"
+  },
+  "50.jpg": {
+    "title": "",
+    "camera": "Contax G2",
+    "film": "Kodak Portra 400",
+    "place": "Kawaguchiko",
+    "year": 2025,
+    "roll": "r13"
+  }
+}

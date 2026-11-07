@@ -1,0 +1,90 @@
+@font-face {
+  font-family: "Geist Serif";
+  src: url("/fonts/GeistSerif-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  /* --name-h (height of HAN LI) is set inline in index.html so it paints before this file loads */
+  --pad: clamp(14px, 2vw, 26px);
+  --pad-l: calc(var(--pad) + env(safe-area-inset-left, 0px));
+  --pad-b: calc(var(--pad) + env(safe-area-inset-bottom, 0px));
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #fff;
+  color: #111;
+  font-family: "Geist Serif", Georgia, serif;
+  font-size: 14px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+
+body { overflow: hidden; overscroll-behavior: none; }
+
+#wall {
+  position: fixed;
+  inset: 0;
+  display: block;
+  touch-action: none;
+  outline: none;
+  opacity: 0;
+  transition: opacity 0.9s ease;
+}
+.loaded #wall { opacity: 1; }
+
+/* caption row right above the name. White + difference, so it reads black on the wall and
+   inverts over photos, like the name. The bio and photo details swap in place. */
+.caption {
+  position: fixed;
+  z-index: 2;
+  left: var(--pad-l);
+  bottom: calc(var(--name-h) + 14px);
+  color: #fff;
+  mix-blend-mode: difference;
+  pointer-events: none;
+  display: grid;
+}
+.caption p {
+  grid-area: 1 / 1;
+  align-self: end;
+  margin: 0;
+  max-width: 40ch;
+  transition: opacity 0.35s ease, transform 0.35s ease, visibility 0.35s;
+}
+.caption a { color: inherit; text-decoration: none; border-bottom: 1px solid currentColor; pointer-events: auto; }
+.caption em { font-style: italic; }
+.caption .photo { opacity: 0; visibility: hidden; transform: translateY(6px); }
+/* visibility (not just opacity) so the hidden link is not a Tab stop */
+.zoomed .caption .bio { opacity: 0; visibility: hidden; transform: translateY(-6px); }
+.zoomed .caption .photo { opacity: 1; visibility: visible; transform: none; }
+
+/* Focusing a photo: HAN LI sinks below the bottom edge and the caption follows it down to the
+   corner, so the photo gets the whole screen. */
+.name, .caption { transition: transform 0.7s cubic-bezier(0.65, 0, 0.35, 1); }
+.zoomed .name { transform: translateY(calc(100% + 2px)); }
+.zoomed .caption { transform: translateY(calc(var(--name-h) + 14px - var(--pad-b))); }
+@media (prefers-reduced-motion: reduce) { .name, .caption { transition: none; } }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* plain gallery for browsers without WebGL; hidden otherwise but still read by screen readers */
+#fallback { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+#photo-list { list-style: none; margin: 0; padding: 0; }
+
+.no-webgl body { overflow: auto; }
+.no-webgl .caption { position: static; color: #111; mix-blend-mode: normal; padding: var(--pad); }
+.no-webgl .name { position: static; fill: #111; mix-blend-mode: normal; }
+.no-webgl #fallback { position: static; width: auto; height: auto; overflow: visible; clip: auto; padding: var(--pad); }
+.no-webgl #photo-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 32px; }
+.no-webgl #photo-list img { width: 100%; height: auto; display: block; border: 14px solid #111; }
+.no-webgl #photo-list span { display: block; margin-top: 8px; }

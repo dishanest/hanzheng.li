@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Photo details</title>
+    <style>
+      :root { color-scheme: light; }
+      body { margin: 0; font: 14px/1.4 -apple-system, system-ui, sans-serif; background: #f6f6f4; color: #111; }
+      header { position: sticky; top: 0; z-index: 1; background: #f6f6f4; padding: 14px 20px; border-bottom: 1px solid #ddd; display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
+      header h1 { font-size: 16px; margin: 0; }
+      header p { margin: 0; color: #666; }
+      #status { margin-left: auto; color: #666; }
+      #save { font: inherit; font-weight: 600; padding: 7px 16px; border-radius: 6px; border: 0; background: #111; color: #fff; cursor: pointer; }
+      #save:disabled { background: #bbb; cursor: default; }
+      .dirty input.changed { border-color: #d39b2a; background: #fffaf0; }
+      main { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 16px; padding: 20px; }
+      .card { display: grid; grid-template-columns: 180px 1fr; gap: 14px; background: #fff; border: 1px solid #e3e3e0; border-radius: 8px; padding: 12px; }
+      .card img { width: 180px; height: 180px; object-fit: contain; background: #eee; border-radius: 4px; cursor: zoom-in; }
+      .card .n { font-weight: 600; margin-bottom: 6px; }
+      label { display: grid; grid-template-columns: 58px 1fr; align-items: center; gap: 8px; margin-bottom: 6px; color: #555; }
+      input { font: inherit; padding: 5px 7px; border: 1px solid #ccc; border-radius: 5px; min-width: 0; }
+      input:focus { outline: 2px solid #111; outline-offset: -1px; }
+      dialog { padding: 0; border: 0; background: transparent; max-width: 96vw; }
+      dialog img { max-width: 96vw; max-height: 92vh; display: block; }
+      dialog::backdrop { background: rgb(0 0 0 / 0.8); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Photo details</h1>
+      <p>Edits stay here until you press Save (or Cmd+S); then they go to <code>src/photo-details.json</code> and the site shows them on reload. Click a thumbnail to see it large. Same camera and film across a roll? Set it once on <a href="/rolls.html">rolls</a>.</p>
+      <span id="status"></span>
+      <button id="save" disabled>Save</button>
+    </header>
+    <main id="cards"></main>
+    <dialog id="big"><img alt="" /></dialog>
+    <datalist id="cameras"></datalist>
+    <datalist id="films"></datalist>
+    <datalist id="places"></datalist>
+    <script type="module">
+      const status = document.getElementById("status");
+      const all = await (await fetch("/__details")).json();
+      const lists = { camera: "cameras", film: "films", place: "places" };
+      const refreshLists = () => {
+        for (const [k, id] of Object.entries(lists)) {
+          const vals = [...new Set(Object.values(all).map((d) => d[k]).filter(Boolean))].sort();
+          document.getElementById(id).innerHTML = vals.map((v) => `<option value="${v.replace(/"/g, "&quot;")}">`).join("");
+        }
+      };
+      refreshLists();
+      const fields = [["title", "Title"], ["camera", "Camera"], ["film", "Film"], ["place", "Place"], ["year", "Year"]];
+      const cards = document.getElementById("cards");
+      const pending = {}; // file -> { field: value } not yet saved
+      const saveBtn = document.getElementById("save");
+      const count = () => Object.values(pending).reduce((n, p) => n + Object.keys(p).length, 0);
+      const refreshSave = () => {
+        const n = count();
+        saveBtn.disabled = n === 0;
+        saveBtn.textContent = n ? `Save ${n} change${n === 1 ? "" : "s"}` : "Save";
+      };
+      for (const [file, d] of Object.entries(all)) {
+        const card = document.createElement("section");
+        card.className = "card";
+        card.innerHTML = `<img src="/photos/${file}" alt="${file}" loading="lazy"><div><div class="n">${file}</div>${fields
+          .map(([k, label]) => `<label>${label}<input name="${k}" ${lists[k] ? `list="${lists[k]}"` : ""} ${k === "year" ? 'inputmode="numeric"' : ""} autocomplete="off"></label>`)
+          .join("")}</div>`;
+        for (const [k] of fields) card.querySelector(`[name=${k}]`).value = d[k] ?? "";
+        card.addEventListener("input", (e) => {
+          const k = e.target.name;
+          const changed = e.target.value.trim() !== String(all[file][k] ?? "");
+          pending[file] ??= {};
+          if (changed) pending[file][k] = e.target.value; else delete pending[file][k];
+          if (!Object.keys(pending[file]).length) delete pending[file];
+          e.target.classList.toggle("changed", changed);
+          card.classList.toggle("dirty", !!pending[file]);
+          refreshSave();
+        });
+        card.querySelector("img").addEventListener("click", () => {
+          const dlg = document.getElementById("big");
+          dlg.querySelector("img").src = `/photos/${file}`;
+          dlg.showModal();
+        });
+        cards.append(card);
+      }
+      document.getElementById("big").addEventListener("click", (e) => e.currentTarget.close());
+
+      async function save() {
+        if (!count()) return;
+        saveBtn.disabled = true;
+        status.style.color = "#666"; status.textContent = "Saving...";
+        const res = await fetch("/__details", { method: "POST", body: JSON.stringify(pending) });
+        if (!res.ok) { status.style.color = "#a22"; status.textContent = `Not saved: ${await res.text()}`; refreshSave(); return; }
+        Object.assign(all, await res.json());
+        const n = count();
+        for (const f of Object.keys(pending)) delete pending[f];
+        document.querySelectorAll("input.changed").forEach((i) => i.classList.remove("changed"));
+        document.querySelectorAll(".card.dirty").forEach((c) => c.classList.remove("dirty"));
+        refreshLists();
+        refreshSave();
+        status.style.color = "#2a7a2a"; status.textContent = `Saved ${n} change${n === 1 ? "" : "s"}`;
+      }
+      saveBtn.addEventListener("click", save);
+      addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); save(); } });
+      // don't lose unsaved typing to a closed tab
+      addEventListener("beforeunload", (e) => { if (count()) e.preventDefault(); });
+    </script>
+  </body>
+</html>

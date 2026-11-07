@@ -22,11 +22,19 @@ for (const p of photos) {
 }
 
 let stopped = false; // set when the fallback takes over, ends the render loop
+// iOS phones: the canvas extends under the status bar and toolbar (see resize() in init)
+const bleed = document.documentElement.classList.contains("bleed");
+const BLEED_TOP = 100, BLEED_BOTTOM = 140, PARK = 200; // CSS px
+const BLEED_TOP_PX = bleed ? BLEED_TOP : 0;
 
 function showFallback(why: unknown) {
   console.warn("Showing the plain gallery:", why);
   document.documentElement.classList.add("no-webgl");
   document.documentElement.classList.remove("zoomed");
+  // undo the iOS full-bleed scroll setup: the plain gallery scrolls normally
+  document.documentElement.classList.remove("bleed");
+  document.body.style.height = "";
+  window.scrollTo(0, 0);
   stopped = true;
   document.getElementById("wall")?.remove();
   list.querySelectorAll<HTMLImageElement>("img[data-src]").forEach((img) => { img.loading = "lazy"; img.src = img.dataset.src!; });
@@ -108,7 +116,8 @@ function init() {
     const nameUnits = reserveBottom * unitsPerPx(vis);
     const lim = {
       minX: bounds.minX + halfW, maxX: bounds.maxX - halfW,
-      minY: bounds.minY + halfH - nameUnits, maxY: bounds.maxY - halfH,
+      // on iOS the wall also shows under the status bar: keep the top margin visible there too
+      minY: bounds.minY + halfH - nameUnits, maxY: bounds.maxY - halfH - BLEED_TOP_PX * unitsPerPx(vis),
       halfW, halfH,
     };
     if (lim.minX > lim.maxX) lim.minX = lim.maxX = (bounds.minX + bounds.maxX) / 2;
@@ -123,14 +132,32 @@ function init() {
     resizeQueued = true;
     requestAnimationFrame(() => { resizeQueued = false; resize(); });
   }
+  // iOS Safari draws only document content (not fixed elements) under the status bar and the
+  // toolbar, and only once the page has scrolled. So there the canvas is absolute, taller than the
+  // layout viewport by BLEED_TOP / BLEED_BOTTOM, and the document is parked a little way down.
+  // The camera still frames the layout viewport; the extra rows just show more wall.
+  function placeCanvas() {
+    if (stopped) return;
+    // a swipe that starts on the caption link can scroll the page: put it back
+    if (Math.abs(window.scrollY - PARK) > 1) window.scrollTo(0, PARK);
+    canvas.style.top = `${window.scrollY - BLEED_TOP}px`;
+  }
+  if (bleed) window.addEventListener("scroll", placeCanvas, { passive: true });
   function resize() {
     vw = window.innerWidth; vh = window.innerHeight;
     // 1.5x: the type is HTML, so the canvas only draws the wall; ~45% fewer pixels than 2x
     dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     renderer.setPixelRatio(dpr);
-    renderer.setSize(vw, vh, false);
-    canvas.style.width = vw + "px"; canvas.style.height = vh + "px";
+    const top = bleed ? BLEED_TOP : 0, bottom = bleed ? BLEED_BOTTOM : 0;
+    renderer.setSize(vw, vh + top + bottom, false);
+    canvas.style.width = vw + "px"; canvas.style.height = vh + top + bottom + "px";
     camera.aspect = vw / vh;
+    if (bleed) {
+      camera.setViewOffset(vw, vh, 0, -top, vw, vh + top + bottom);
+      document.body.style.height = `${PARK + vh + bottom + PARK}px`;
+      window.scrollTo(0, PARK);
+      placeCanvas();
+    }
     nameH = nameEl.getBoundingClientRect().height;
     // room for three caption lines above the name, whichever text is showing
     const lineH = parseFloat(getComputedStyle(captionEl).lineHeight) || 19;

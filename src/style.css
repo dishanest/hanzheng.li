@@ -38,6 +38,8 @@ body { overflow: hidden; overscroll-behavior: none; }
   transition: opacity 0.9s ease;
 }
 .loaded #wall { opacity: 1; }
+html.bleed #wall { position: absolute; inset: auto; left: 0; }
+html.bleed .caption a { touch-action: none; }
 
 /* caption row right above the name. White + difference, so it reads black on the wall and
    inverts over photos, like the name. The bio and photo details swap in place. */
@@ -69,6 +71,7 @@ body { overflow: hidden; overscroll-behavior: none; }
    corner, so the photo gets the whole screen. */
 .name, .caption { transition: transform 0.7s cubic-bezier(0.65, 0, 0.35, 1); }
 .zoomed .name { transform: translateY(calc(100% + 2px)); }
+html.bleed.zoomed .name { transform: translateY(calc(100% + 160px)); } /* past the iOS toolbar too, where the wall now shows */
 .zoomed .caption { transform: translateY(calc(var(--name-h) + 14px - var(--pad-b))); }
 @media (prefers-reduced-motion: reduce) { .name, .caption { transition: none; } }
 

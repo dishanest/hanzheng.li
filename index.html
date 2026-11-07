@@ -12,8 +12,12 @@
       /* HAN LI outline is 3248.4 x 710: full width, cut at the baseline (the point of the N is cropped), 1px past the bottom so a fractional height never leaves a hairline gap */
       :root { --name-h: calc(100vw * 0.218569); }
       html, body { margin: 0; height: 100%; background: #fff; overflow: hidden; }
+      /* iOS Safari only lets a page draw under the status bar and the toolbar once it has scrolled:
+         give the document scroll room and park it part way down (see main.ts) */
+      html.bleed, html.bleed body { height: auto; overflow: visible; }
       .name { position: fixed; left: 0; bottom: -1px; display: block; width: 100vw; height: var(--name-h); fill: #fff; mix-blend-mode: difference; pointer-events: none; z-index: 2; }
     </style>
+    <script>if (CSS.supports("-webkit-touch-callout", "none") && Math.min(screen.width, screen.height) < 600) document.documentElement.classList.add("bleed");</script>
     <link rel="stylesheet" href="/src/style.css" />
     <script type="module" src="/src/main.ts"></script>
   </head>

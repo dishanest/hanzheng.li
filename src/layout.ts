@@ -32,10 +32,11 @@ const ASPECT = 1.6; // the wall grows about this much wider than tall
 type Box = { x: number; y: number; w: number; h: number; c: number };
 
 /**
- * @param anchor the photo that sits at the bottom centre of the wall (nothing hangs lower),
- *   so the opening view can centre on it without the name covering other frames.
+ * @param anchor the photo the opening view centres on. It hangs first, at the origin.
+ * @param floor true: nothing hangs below the anchor, so on phones the full-width name under the
+ *   opening view covers no other frame. false: the wall grows around the anchor, which sits mid wall.
  */
-export function layout(list: Photo[], anchor?: string, seed = 7): { items: Placed[]; bounds: { minX: number; maxX: number; minY: number; maxY: number } } {
+export function layout(list: Photo[], anchor?: string, floor = true, seed = 7): { items: Placed[]; bounds: { minX: number; maxX: number; minY: number; maxY: number } } {
   const rand = rng(seed);
   const sized = list.map((photo, index) => {
     let long = 230 + rand() * 110;
@@ -67,15 +68,14 @@ export function layout(list: Photo[], anchor?: string, seed = 7): { items: Place
     return Math.abs(o.x - b.x) * 2 < o.w + b.w + g * 2 && Math.abs(o.y - b.y) * 2 < o.h + b.h + g * 2;
   });
 
-  let floor = 0; // bottom edge of the anchor; nothing hangs below it
+  let floorY = -Infinity; // bottom edge of the anchor when `floor` is set; nothing hangs below it
   const centre = { x: 0, y: 0 };
   order.forEach((s, i) => {
     const c = cluster[i];
     const w = s.outerW, h = s.outerH;
     if (i === 0) {
       boxes.push({ x: 0, y: 0, w, h, c });
-      floor = -h / 2;
-      centre.y = floor + wallH / 2;
+      if (floor) { floorY = -h / 2; centre.y = floorY + wallH / 2; }
       return;
     }
     const mates = boxes.filter((o) => o.c === c);
@@ -98,7 +98,7 @@ export function layout(list: Photo[], anchor?: string, seed = 7): { items: Place
         ...xs.map((x) => [x, o.y - dy] as [number, number]),
       ];
       for (const [x, y] of cands) {
-        if (y - h / 2 < floor - 0.5) continue;
+        if (y - h / 2 < floorY - 0.5) continue;
         const b = { x, y, w, h, c };
         if (collides(b)) continue;
         const local = Math.hypot((x - pull.x) / 1.2, y - pull.y);
@@ -116,7 +116,7 @@ export function layout(list: Photo[], anchor?: string, seed = 7): { items: Place
   });
 
   const items: Placed[] = order.map((s, i) => ({ ...s, x: boxes[i].x, y: boxes[i].y }));
-  // centre the wall's height on y = 0 (the anchor stays at its bottom edge, x = 0)
+  // centre the wall's height on y = 0
   const minY = Math.min(...items.map((it) => it.y - it.outerH / 2));
   const maxY = Math.max(...items.map((it) => it.y + it.outerH / 2));
   for (const it of items) it.y -= (minY + maxY) / 2;

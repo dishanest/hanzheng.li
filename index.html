@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, viewport-fit=cover" />
     <title>Han Li</title>
     <meta name="description" content="Han Li - software engineer and photographer in New York. Building roze.ai." />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -11,13 +11,17 @@
     <style>
       /* HAN LI outline is 3248.4 x 710: full width, cut at the baseline (the point of the N is cropped), 1px past the bottom so a fractional height never leaves a hairline gap */
       :root { --name-h: calc(100vw * 0.218569); }
-      html, body { margin: 0; height: 100%; background: #fff; overflow: hidden; }
-      /* iOS Safari only lets a page draw under the status bar and the toolbar once it has scrolled:
-         give the document scroll room and park it part way down (see main.ts) */
-      html.bleed, html.bleed body { height: auto; overflow: visible; }
+      /* the page itself scrolls the wall (no scrollbars: it pans like a canvas) */
+      html, body { margin: 0; background: #fff; scrollbar-width: none; }
+      html::-webkit-scrollbar { display: none; }
       .name { position: fixed; left: 0; bottom: -1px; display: block; width: 100vw; height: var(--name-h); fill: #fff; mix-blend-mode: difference; pointer-events: none; z-index: 2; }
     </style>
-    <script>if (CSS.supports("-webkit-touch-callout", "none") && Math.min(screen.width, screen.height) < 600) document.documentElement.classList.add("bleed");</script>
+    <script>
+      // iOS phones: the name sinks further when a photo is focused, past the toolbar (style.css)
+      if (CSS.supports("-webkit-touch-callout", "none") && Math.min(screen.width, screen.height) < 600) document.documentElement.classList.add("bleed");
+      // wide screens: the name fills the bottom only for the opening, then shrinks to the corner
+      else if (innerWidth >= 700) document.documentElement.classList.add("desk");
+    </script>
     <link rel="stylesheet" href="/src/style.css" />
     <script type="module" src="/src/main.ts"></script>
   </head>
@@ -27,12 +31,10 @@
     <svg class="name" viewBox="0 0 3248.4 710" preserveAspectRatio="none" aria-hidden="true"><path d="M0 710V704L63 668Q75 661 79.5 654.5Q84 648 84 635V75Q84 61 79.5 55.0Q75 49 63 42L0 6V0H262V6L199 42Q187 49 182.5 55.0Q178 61 178 75V328H532V75Q532 61 527.5 55.0Q523 49 511 42L448 6V0H710V6L647 42Q635 49 630.5 55.0Q626 61 626 75V635Q626 648 630.5 654.5Q635 661 647 668L710 704V710H448V704L511 668Q523 661 527.5 654.5Q532 648 532 635V363H178V635Q178 648 182.5 654.5Q187 661 199 668L262 704V710ZM1362 637Q1368 649 1373.5 655.0Q1379 661 1391 668L1454 704V710H1176V704L1239 668Q1251 661 1254.0 655.0Q1257 649 1252 637L1190 485H882L822 636Q817 649 820.0 655.0Q823 661 835 668L898 704V710H695V704L758 668Q770 661 776.0 655.0Q782 649 787 636L1015 58L991 0H1097ZM1033 103 896 450H1175ZM2075 725H2061L1563 149V635Q1563 648 1567.5 654.5Q1572 661 1584 668L1647 704V710H1444V704L1507 668Q1519 661 1523.5 654.5Q1528 648 1528 635V108L1439 5V0H1561L2040 554V75Q2040 61 2035.5 55.0Q2031 49 2019 42L1956 6V0H2159V6L2096 42Q2084 49 2079.5 55.0Q2075 61 2075 75ZM2400.4 710V704L2463.4 668Q2475.4 661 2479.9 654.5Q2484.4 648 2484.4 635V75Q2484.4 61 2479.9 55.0Q2475.4 49 2463.4 42L2400.4 6V0H2662.4V6L2599.4 42Q2587.4 49 2582.9 55.0Q2578.4 61 2578.4 75V675H2788.4Q2802.4 675 2808.4 672.0Q2814.4 669 2823.4 660L2934.4 542L2939.4 543L2907.4 705L2906.4 710ZM2986.4 710V704L3049.4 668Q3061.4 661 3065.9 654.5Q3070.4 648 3070.4 635V75Q3070.4 61 3065.9 55.0Q3061.4 49 3049.4 42L2986.4 6V0H3248.4V6L3185.4 42Q3173.4 49 3168.9 55.0Q3164.4 61 3164.4 75V635Q3164.4 648 3168.9 654.5Q3173.4 661 3185.4 668L3248.4 704V710Z"/></svg>
 
     <div class="caption" id="caption">
-      <p class="bio">Software engineer &amp; photographer in New York.<br />Building <a href="https://roze.ai">roze.ai</a>.</p>
+      <p class="bio">Software engineer &amp; photographer in New York.<br />Building <a href="https://roze.ai">roze.ai</a>. Contact <a class="mail" href="mailto:hello@hanzheng.li">hello@hanzheng.li</a>.</p>
       <p class="photo" id="photo-info" aria-live="polite"></p>
     </div>
 
-    <main id="fallback">
-      <ul id="photo-list"></ul>
-    </main>
+    <div id="scroller" tabindex="-1"><main id="wall" aria-label="A wall of framed photographs by Han Li"></main></div>
   </body>
 </html>

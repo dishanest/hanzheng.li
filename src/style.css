@@ -17,7 +17,6 @@
 
 html, body {
   margin: 0;
-  height: 100%;
   background: #fff;
   color: #111;
   font-family: "Geist Serif", Georgia, serif;
@@ -26,20 +25,126 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-body { overflow: hidden; overscroll-behavior: none; }
-
-#wall {
+/* opening and a focused photo: the page holds still while #wall is zoomed by transform */
+#scroller {
   position: fixed;
   inset: 0;
-  display: block;
-  touch-action: none;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
   outline: none;
+}
+#scroller::-webkit-scrollbar { display: none; }
+/* locking is done in main.ts (wheel and keys are swallowed): Safari resets a scroller's position
+   when its overflow changes, which threw the focused frame's start point to the screen edge */
+/* iOS phones: the page itself scrolls (see main.ts) */
+html.bleed #scroller { position: static; overflow: visible; }
+html.bleed.locked { overflow: hidden; } /* not body too: body would then clip the wall to the screen width, and the browser would reset the scroll */
+
+/* ---------- the wall ----------
+   Sizes are wall units (about mm) times --k, the css px per unit at the resting scale (main.ts).
+   The light comes from the upper left, as in a gallery: the moulding's top and left faces are
+   lit, the bottom and right in shade, the lip shades the mat, and each frame throws a soft
+   shadow down and to the right. */
+#wall {
+  --u: calc(var(--k, 1) * 1px);
+  position: relative;
+  width: calc(var(--W) * var(--u));
+  height: calc(var(--H) * var(--u));
+  margin: 0 auto calc(var(--reserve, 0px));
   opacity: 0;
   transition: opacity 0.9s ease;
 }
+.hang { position: absolute; inset: 0; transform-origin: 0 0; }
 .loaded #wall { opacity: 1; }
-html.bleed #wall { position: absolute; inset: auto; left: 0; }
-html.bleed .caption a { touch-action: none; }
+
+.frame {
+  position: absolute;
+  left: calc(var(--x) * var(--u));
+  top: calc(var(--y) * var(--u));
+  width: calc(var(--w) * var(--u));
+  height: calc(var(--h) * var(--u));
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  cursor: zoom-in;
+  background: #fbfaf7;
+  border: calc(var(--fw) * var(--u)) solid;
+  border-color: #2b2927 #1d1c1b #060606 #0d0d0c;
+  box-shadow:
+    calc(5 * var(--u)) calc(8 * var(--u)) calc(16 * var(--u)) rgb(20 16 12 / 0.3),
+    calc(1.5 * var(--u)) calc(2.5 * var(--u)) calc(4 * var(--u)) rgb(20 16 12 / 0.22);
+  /* fast out: the focused frame's move (FOCUS_MS in main.ts) and the hover lift share it */
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.25s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.frame.still { transition: none !important; } /* beats .focus-idle and .focusing transitions, whichever is on */
+/* focus: the other frames fly outward (main.ts) and fade, and stop taking clicks */
+.zoomed .frame:not(.focused) { opacity: 0; pointer-events: none; }
+/* the others take longer, and their fade tapers off, so they are seen drifting away (and back) */
+.focusing .frame:not(.focused) {
+  transition: transform 0.55s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.55s cubic-bezier(0.3, 0.55, 0.35, 1), box-shadow 0.25s ease;
+}
+/* once focused, the hover peek (main.ts) eases in and out gently */
+.focus-idle .frame, .focus-idle .frame:not(.focused) { transition: transform 0.4s cubic-bezier(0.25, 0.8, 0.3, 1), opacity 0.4s ease, box-shadow 0.25s ease; }
+.zoomed.peek .frame:not(.focused) { opacity: 0.2; }
+.zoomed.peek #wall { cursor: zoom-out; }
+/* no will-change on the frames: Safari composites transform and opacity transitions by itself,
+   and a layer created inside the scroller as a move starts was drawn from the screen's corner */
+.frame.focused { z-index: 1; }
+/* the photo full screen, panned by the browser's own scrolling */
+.detail {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #fff;
+  cursor: zoom-out;
+  scrollbar-width: none;
+  outline: none;
+}
+.detail::-webkit-scrollbar { display: none; }
+.detail img { display: block; max-width: none; }
+/* the lip's shadow on the mat (or the print), above the photo */
+.frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow:
+    inset calc(2 * var(--u)) calc(3.5 * var(--u)) calc(5 * var(--u)) rgb(0 0 0 / 0.3),
+    inset calc(-0.5 * var(--u)) calc(-0.5 * var(--u)) calc(1.5 * var(--u)) rgb(0 0 0 / 0.1);
+}
+.frame img {
+  box-sizing: content-box;
+  display: block;
+  width: calc(var(--pw) * var(--u));
+  height: calc(var(--ph) * var(--u));
+  background: var(--avg);
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+.frame img.in { opacity: 1; }
+/* the mat's bevel: a thin white cut edge round the print, lit on the faces turned to the light */
+.frame img.matted {
+  border: calc(2.5 * var(--u)) solid;
+  border-color: #e4e3df #ebeae6 #ffffff #fcfcfa;
+}
+.zoomed .frame.focused { cursor: zoom-in; }
+.zoomed #wall { cursor: zoom-out; }
+@media (hover: hover) {
+  html:not(.locked) .frame:hover {
+    transform: translate(calc(-1 * var(--u)), calc(-2 * var(--u)));
+    box-shadow:
+      calc(8 * var(--u)) calc(13 * var(--u)) calc(24 * var(--u)) rgb(20 16 12 / 0.3),
+      calc(2 * var(--u)) calc(3.5 * var(--u)) calc(6 * var(--u)) rgb(20 16 12 / 0.2);
+  }
+}
+.frame:focus-visible { outline: 2px solid #2a6bd3; outline-offset: 4px; }
 
 /* caption row right above the name. White + difference, so it reads black on the wall and
    inverts over photos, like the name. The bio and photo details swap in place. */
@@ -75,19 +180,31 @@ html.bleed.zoomed .name { transform: translateY(calc(100% + 160px)); } /* past t
 .zoomed .caption { transform: translateY(calc(var(--name-h) + 14px - var(--pad-b))); }
 @media (prefers-reduced-motion: reduce) { .name, .caption { transition: none; } }
 
+/* Wide screens: HAN LI fills the bottom while the wall opens, then shrinks into the bottom-left
+   corner (still flush with both edges) as the opening zoom runs. The bio fades in beside it, its
+   bottom just clear of the screen edge; a focused photo's details replace the bio in place. */
+/* Wide screens: the name sits --pad in from the left and bottom edges (Safari rounds the window's
+   corners, so flush type got clipped), at full width for the opening and small once settled. */
+.desk { --name-small-h: 60px; --name-small-w: calc(var(--name-small-h) * 4.57521); }
+.desk .name {
+  left: var(--pad); bottom: var(--pad);
+  width: calc(100vw - 2 * var(--pad)); height: calc((100vw - 2 * var(--pad)) * 0.218569);
+}
+.desk .caption { left: calc(var(--pad) + var(--name-small-w) + 22px); bottom: var(--bio-bottom, var(--pad)); font-size: 16px; }
+.desk:not(.settled) .caption { opacity: 0; visibility: hidden; }
+.desk .caption { transition: opacity 0.6s ease 1.5s, visibility 0s linear 1.5s, transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.desk.settled .name {
+  width: var(--name-small-w); height: var(--name-small-h);
+  transition: width 1.8s cubic-bezier(0.65, 0, 0.35, 1), height 1.8s cubic-bezier(0.65, 0, 0.35, 1), opacity 0.3s ease;
+}
+.settled-now .caption { transition-delay: 0s; }
+/* a focused or full-screen photo: the name goes, and the details slide left into the corner, on
+   the same baseline, as far in from the left as that baseline is up from the bottom */
+.desk.zoomed .name { transform: none; opacity: 0; }
+.desk.zoomed .caption { transition-delay: 0s; transform: translateX(calc(-1 * (var(--name-small-w) + 22px))); }
+@media (prefers-reduced-motion: reduce) { .desk.settled .name, .desk .caption { transition: none; } }
+
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
-
-/* plain gallery for browsers without WebGL; hidden otherwise but still read by screen readers */
-#fallback { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-#photo-list { list-style: none; margin: 0; padding: 0; }
-
-.no-webgl body { overflow: auto; }
-.no-webgl .caption { position: static; color: #111; mix-blend-mode: normal; padding: var(--pad); }
-.no-webgl .name { position: static; fill: #111; mix-blend-mode: normal; }
-.no-webgl #fallback { position: static; width: auto; height: auto; overflow: visible; clip: auto; padding: var(--pad); }
-.no-webgl #photo-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 32px; }
-.no-webgl #photo-list img { width: 100%; height: auto; display: block; border: 14px solid #111; }
-.no-webgl #photo-list span { display: block; margin-top: 8px; }

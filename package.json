@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --host"
+    "preview": "vite preview --host",
+    "thumbs": "python3 scripts/thumbs.py"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

@@ -52,6 +52,16 @@ const describe = (p: (typeof photos)[number]) =>
   [p.title, p.camera, p.film ? `${p.film} film` : "", p.place, String(p.year)].filter(Boolean).join(", ") || "Photograph";
 
 const { items, bounds } = layout(photos, openingPhoto, !desk);
+/** Wall units visible top to bottom. Laptop: about a third of the height per frame;
+ *  phone portrait: 2-3 frames across. */
+const unitsTall = (w: number, h: number) => (w / h < 0.8 ? (820 * h) / w : 1150);
+// The wall loads small copies (scripts/thumbs.py); the full export loads when a photo is
+// focused or hovered. Large screens that would show a small copy soft swap in the full ones
+// after the opening, so the first view still loads fast.
+const SMALL_PX = 640;
+const photoUrl = (file: string, full: boolean) =>
+  `${import.meta.env.BASE_URL}photos/${full ? file : `sm/${file.replace(/\.jpg$/, ".webp")}`}`;
+const restingDevicePx = (innerHeight / unitsTall(innerWidth, innerHeight)) * devicePixelRatio;
 const wallW = bounds.maxX - bounds.minX, wallH = bounds.maxY - bounds.minY; // wall units
 wall.style.setProperty("--W", String(wallW));
 wall.style.setProperty("--H", String(wallH));
@@ -74,11 +84,12 @@ const frames = items.map((it) => {
   img.alt = "";
   img.decoding = "async";
   img.width = it.photo.w; img.height = it.photo.h;
-  img.src = `${import.meta.env.BASE_URL}photos/${it.photo.file}`;
+  img.src = photoUrl(it.photo.file, false);
   if (it.photo.mat > 0) img.className = "matted";
   b.append(img);
   hangEl.append(b);
-  return { el: b, img, item: it };
+  const soft = Math.max(it.pw, it.ph) * restingDevicePx > SMALL_PX * 1.1;
+  return { el: b, img, item: it, soft, hiRes: null as Promise<void> | null };
 });
 
 // ---------- sizes ----------
@@ -98,9 +109,7 @@ const pad = () => padProbe.offsetWidth;
 
 function measure() {
   vw = bleed ? root.clientWidth : scroller.clientWidth; vh = window.innerHeight;
-  // laptop: about a third of the height per frame; phone portrait: 2-3 frames across
-  const vis = vw / vh < 0.8 ? (820 * vh) / vw : 1150; // wall units visible vertically
-  k = vh / vis;
+  k = vh / unitsTall(vw, vh);
   topPx = Math.min(vw, vh) * 0.06;
   // full-width height (index.html; wide screens inset it by --pad on each side, style.css)
   const nameH = desk ? (vw - 2 * pad()) * 0.218569 + pad() : vw * 0.218569;
@@ -108,6 +117,7 @@ function measure() {
   if (desk) {
     const smallH = parseFloat(getComputedStyle(root).getPropertyValue("--name-small-h")) || 60;
     reserveFull = nameH + 14;
+    root.style.setProperty("--name-k", String((smallH * 4.57521) / (innerWidth - 2 * pad()))); // style.css --name-small-w
     reserveSmall = Math.max(smallH, lineH * 3) + 18;
     reserveFocused = reserveSmall + (coarse ? 30 : 0); // tablets: home-indicator inset
     centreBio();
@@ -160,33 +170,52 @@ function wholeWall(): View {
   const s = Math.min(availW / (wallW * k), availH / (wallH * k));
   return { px: (wallW * k) / 2, py: (wallH * k) / 2, qx: vw / 2, qy: topPx + availH / 2, s };
 }
-let current: View | null = null; // null: no transform, the page scrolls
+// null: no transform, the page scrolls. While a tween runs this is its end view (tweenView has the view on screen).
+let current: View | null = null;
 function apply(v: View | null) {
   current = v;
-  if (!v) { hangEl.style.transform = ""; return; }
-  const tx = v.qx + sc.x - wall.offsetLeft - v.s * v.px, ty = v.qy + sc.y - v.s * v.py;
-  hangEl.style.transform = `translate(${tx}px, ${ty}px) scale(${v.s})`;
+  hangEl.style.transform = v ? transformOf(v) : "";
 }
 
-let tween: number | null = null;
-/** Animate between views: scale moves in log space so the zoom runs at an even visual rate. */
-function animate(from: View, to: View, dur: number, smooth: boolean, done?: () => void) {
-  if (tween !== null) cancelAnimationFrame(tween);
-  if (reduceMotion || dur <= 0) { tween = null; apply(to); done?.(); return; }
-  const t0 = performance.now();
-  const step = (now: number) => {
-    const t = Math.min(1, (now - t0) / dur);
+const transformOf = (v: View) =>
+  `translate(${v.qx + sc.x - wall.offsetLeft - v.s * v.px}px, ${v.qy + sc.y - v.s * v.py}px) scale(${v.s})`;
+let tween: Animation | null = null;
+let tweenView: (() => View) | null = null; // the view on screen now, while a tween runs
+/** Animate between views: scale moves in log space so the zoom runs at an even visual rate.
+ *  A Web Animation of sampled keyframes, not a per-frame style write: Safari then runs the zoom
+ *  on the compositor, and does not draw the wall again at each new scale. */
+function animate(from: View | null, to: View, dur: number, smooth: boolean, done?: () => void) {
+  from = stopTween() ?? from ?? to; // a running tween: start where it is on screen now
+  if (reduceMotion || dur <= 0) { apply(to); done?.(); return; }
+  const f = from;
+  const at = (t: number): View => {
     const e = smooth ? (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2) : 1 - Math.pow(1 - t, 3);
-    const s = from.s * Math.pow(to.s / from.s, e);
     const lerp = (a: number, b: number) => a + (b - a) * e;
-    apply({ px: lerp(from.px, to.px), py: lerp(from.py, to.py), qx: lerp(from.qx, to.qx), qy: lerp(from.qy, to.qy), s });
-    if (t < 1) tween = requestAnimationFrame(step);
-    else { tween = null; done?.(); }
+    return { px: lerp(f.px, to.px), py: lerp(f.py, to.py), qx: lerp(f.qx, to.qx), qy: lerp(f.qy, to.qy), s: f.s * Math.pow(to.s / f.s, e) };
   };
-  tween = requestAnimationFrame(step);
+  const N = Math.max(30, Math.round(dur / 10)); // dense, so the straight runs between keyframes stay on the curve
+  const keys = Array.from({ length: N + 1 }, (_, i) => ({ transform: transformOf(at(i / N)) }));
+  apply(to); // underneath the animation, so its end shows no jump
+  const a = hangEl.animate(keys, { duration: dur, easing: "linear" });
+  tween = a;
+  tweenView = () => at(Math.min(1, Number(a.currentTime ?? 0) / dur));
+  a.onfinish = () => {
+    if (tween !== a) return;
+    tween = null; tweenView = null;
+    done?.();
+  };
+}
+/** Stop a running tween where it is on screen, and return that view. */
+function stopTween(): View | null {
+  if (!tween) return null;
+  const v = tweenView!();
+  tween.cancel(); tween = null; tweenView = null;
+  apply(v);
+  return v;
 }
 
 // ---------- opening ----------
+const nameEl = document.querySelector<SVGSVGElement>(".name")!;
 let phase: "waiting" | "intro" | "free" = "waiting";
 function startOpening() {
   measure();
@@ -217,17 +246,18 @@ function runOpening() {
 }
 function finishOpening() {
   phase = "free";
-  if (tween !== null) { cancelAnimationFrame(tween); tween = null; }
+  if (tween) { tween.cancel(); tween = null; tweenView = null; }
   apply(null);
   hangEl.style.willChange = "";
   root.classList.remove("locked");
   settle();
   focusScroller();
+  if (desk) upgradeSoft();
 }
 /** The user took over during the opening: land on the resting view straight away. */
 function interruptOpening() {
   if (phase === "free") return false;
-  const from = current;
+  const from = tweenView ? tweenView() : current;
   phase = "free";
   settle(true);
   if (from && !reduceMotion) animate(from, identity(), 350, false, finishOpening);
@@ -237,17 +267,19 @@ function interruptOpening() {
 
 // the wall fades in once its photos are in (or after 4 s, whichever is first)
 let pending = frames.length;
+let revealed = false;
 const reveal = () => {
-  if (root.classList.contains("loaded")) return;
+  if (revealed) return;
+  revealed = true;
   // photos from cache can arrive before the zoomed-out view is set: set it before showing the wall
   if (phase === "waiting" && !current && !reduceMotion) apply(wholeWall());
-  root.classList.add("loaded");
-  runOpening();
+  // two frames on, so the hidden wall is drawn first: else the fade has no start and is skipped
+  requestAnimationFrame(() => requestAnimationFrame(() => { root.classList.add("loaded"); runOpening(); }));
 };
 for (const f of frames) {
   const done = () => { f.img.classList.add("in"); if (--pending <= 0) reveal(); };
-  if (f.img.complete && f.img.naturalWidth) done();
-  else { f.img.addEventListener("load", done, { once: true }); f.img.addEventListener("error", done, { once: true }); }
+  // decoded, not just loaded: the opening zoom then never waits on a decode
+  f.img.decode().then(done, done);
 }
 window.setTimeout(reveal, 4000);
 
@@ -362,7 +394,51 @@ function showInfo(f: Frame) {
   ].filter(Boolean);
   photoInfo.innerHTML = lines.join("<br>");
 }
+/** Swap in the full export once it is loaded and decoded, so the swap shows no gap. */
+function loadFull(f: Frame) {
+  if (!f.hiRes) {
+    const url = photoUrl(f.item.photo.file, true);
+    const im = new Image();
+    im.src = url;
+    // swapped once any focus move is over: a new picture mid-move repaints the moving frame.
+    // The closure keeps `im` alive, so its decoded picture is still there at the swap.
+    const swap = () => {
+      if (busy()) window.setTimeout(swap, busyUntil - performance.now());
+      else { f.img.src = url; void im; }
+    };
+    // Safari's decode() can reject a good image: swap anyway if it loaded, else allow a retry
+    f.hiRes = im.decode().then(swap, () => { if (im.naturalWidth) swap(); else f.hiRes = null; });
+  }
+  return f.hiRes;
+}
+/** Large screens: swap in the full exports, nearest the screen centre first, two at a time,
+ *  so the downloads and decodes do not all land while the user starts to pan. */
+let upgrading = false;
+function upgradeSoft() {
+  if (upgrading) return;
+  upgrading = true;
+  const cx = vw / 2, cy = vh / 2;
+  const queue = frames.filter((f) => f.soft && !f.hiRes)
+    .map((f) => { const r = homeRect(f); return { f, d: Math.hypot(r.x + r.w / 2 - cx, r.y + r.h / 2 - cy) }; })
+    .sort((a, b) => a.d - b.d).map((q) => q.f);
+  const next = (): unknown => { const f = queue.shift(); return f && loadFull(f).then(next); };
+  next(); next();
+}
+// a pressed or resting pointer will likely click: fetch that frame's full export now
+wall.addEventListener("pointerdown", (e) => {
+  const f = frames.find((x) => x.el === (e.target as HTMLElement).closest(".frame"));
+  if (f) loadFull(f);
+});
+let hoverTimer = 0;
+wall.addEventListener("pointerover", (e) => {
+  if (e.pointerType !== "mouse" || zoomed) return;
+  const f = frames.find((x) => x.el === (e.target as HTMLElement).closest(".frame"));
+  clearTimeout(hoverTimer);
+  if (f && !f.hiRes) hoverTimer = window.setTimeout(() => loadFull(f), 150);
+});
+wall.addEventListener("pointerout", () => clearTimeout(hoverTimer));
 function focusOn(f: Frame) {
+  requestAnimationFrame(() => requestAnimationFrame(() => loadFull(f))); // not in the move's first frame
   if (phase !== "free" || tween !== null) finishOpening();
   if (bigFrame && bigFrame !== f) unBig(bigFrame); // still shrinking home from the last focus
   for (const g of frames) {
@@ -421,7 +497,7 @@ function enterDetail(f: Frame, clickX: number, clickY: number) {
   d.className = "detail";
   d.tabIndex = -1; // focusable, so arrow keys scroll it
   const img = new Image();
-  img.src = f.img.src;
+  img.src = photoUrl(f.item.photo.file, true);
   img.alt = "";
   img.style.width = `${W}px`; img.style.height = `${H}px`;
   d.append(img);
@@ -592,7 +668,11 @@ window.addEventListener("resize", () => {
     if (coarse && phase === "free" && !zoomed && (bleed ? root.clientWidth : scroller.clientWidth) === vw) return;
     // keep the wall point at the screen centre where it is
     const oldK = k, cx = (sc.x + vw / 2 - wall.offsetLeft) / oldK, cy = (sc.y + vh / 2) / oldK;
+    // the name's size follows the width (--name-k) at once, not by its 1.8 s shrink transition
+    nameEl.style.transition = "none";
     measure();
+    void getComputedStyle(nameEl).transform;
+    nameEl.style.transition = "";
     if (phase === "waiting") { startOpening(); return; }
     if (phase === "intro") { finishOpening(); }
     sc.to(cx * k + wall.offsetLeft - vw / 2, cy * k - vh / 2);

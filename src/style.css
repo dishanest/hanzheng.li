@@ -22,6 +22,8 @@ html, body {
   color: #111;
   font-family: "Geist Serif", Georgia, serif;
   font-size: 14px;
+  -webkit-text-size-adjust: 100%; /* iOS must not enlarge the caption (it is sized to fit the width) */
+  text-size-adjust: 100%;
   line-height: 1.35;
   -webkit-font-smoothing: antialiased;
 }
@@ -67,7 +69,10 @@ html.bleed .caption a { touch-action: none; }
   mix-blend-mode: difference;
   pointer-events: none;
   display: grid;
-  font-size: 16px; /* wide screens: 18px, below */
+  /* phones: 16px, smaller on narrow screens so each bio line still fits the width unwrapped
+     (its longer line is about 21.5 em wide); wide screens: 18px, below */
+  font-size: max(13px, min(16px, calc((100vw - var(--pad-l) - var(--pad)) / 21.8)));
+  max-width: calc(100vw - var(--pad-l) - var(--pad));
 }
 .caption p {
   grid-area: 1 / 1;
@@ -101,7 +106,7 @@ html.bleed.zoomed .name { transform: translateY(calc(100% + 160px)); } /* past t
   left: var(--pad); bottom: var(--pad);
   width: calc(100vw - 2 * var(--pad)); height: calc((100vw - 2 * var(--pad)) * 0.218569);
 }
-.desk .caption { left: calc(var(--pad) + var(--name-small-w) + 22px); bottom: var(--bio-bottom, var(--pad)); font-size: 18px; }
+.desk .caption { left: calc(var(--pad) + var(--name-small-w) + 22px); bottom: var(--bio-bottom, var(--pad)); font-size: 18px; max-width: none; }
 .desk:not(.settled) .caption { opacity: 0; visibility: hidden; }
 .desk .caption { transition: opacity 0.6s ease 1.5s, visibility 0s linear 1.5s, transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1); }
 /* shrunk by a scale (--name-k, set in main.ts), not by width and height: a transform runs on

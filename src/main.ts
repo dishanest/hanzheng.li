@@ -288,7 +288,14 @@ function init() {
   }
 
   window.addEventListener("wheel", (e) => {
-    if (stopped || e.ctrlKey || detail) return; // native scrolling: the fallback gallery, the full-screen photo; pinch / ctrl+scroll stays browser zoom
+    if (stopped || e.ctrlKey) return; // the fallback gallery scrolls natively; pinch / ctrl+scroll stays browser zoom
+    if (detail) {
+      // the full-screen photo pans natively; at its edge a sideways scroll would become the
+      // browser's back / forward swipe, so it stops there
+      const sx = Math.sign(e.deltaX);
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY) && sx && (!detail.isConnected || atEdge(detail, sx, 0))) e.preventDefault();
+      return;
+    }
     e.preventDefault();
     if (zoomed) return; // a focused photo holds still; click or Escape steps back
     let dx = e.deltaX, dy = e.deltaY;
@@ -370,10 +377,8 @@ function init() {
     if (stopped) return;
     if (e.metaKey || e.ctrlKey || e.altKey) { heldKeys.clear(); return; } // keep browser shortcuts (Cmd+Left is Back)
     const arrow: Record<string, Dir> = { ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }, ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 } };
-    if (zoomed && arrow[e.key]) {
+    if (zoomed && !detail && arrow[e.key]) { // full screen: the arrows pan the photo natively, nothing else
       const dir = arrow[e.key];
-      // full screen: the arrow pans the photo natively until it reaches that edge, then seeks
-      if (detail?.isConnected && !atEdge(detail, dir.x, dir.y)) return;
       e.preventDefault();
       if (!e.repeat) seek(dir); // a held key moves one photo, not a stream of them
       return;
@@ -611,11 +616,9 @@ function init() {
     };
   }
   // ---------- seeking ----------
-  // An arrow key (or a swipe) on a focused or full-screen photo moves to its nearest neighbour in
-  // that direction on the wall.
+  // An arrow key (or a swipe) on a focused photo moves to its nearest neighbour in that
+  // direction on the wall. Full screen only pans.
   const SEEK_MS = 450;
-  let incoming: HTMLDivElement | null = null; // full screen: the next photo, decoding before it slides in
-  let slideUntil = 0;
   /** The nearest frame from `f` in screen direction `d` (y down): centre distance along that way,
    *  with distance to the side costing 2.5 times as much, inside a cone of about 56 degrees. The
    *  opposite key right after a move goes straight back. */
@@ -636,11 +639,6 @@ function init() {
   }
   function seek(dir: Dir) {
     if (!zoomed) return;
-    if (detail) {
-      // one slide at a time, and only once the current photo is on screen
-      if (detail.isConnected && !incoming && performance.now() >= slideUntil) seekDetail(dir);
-      return;
-    }
     const next = neighbour(zoomed, dir);
     if (!next) return; // the edge of the wall
     const prev = zoomed;
@@ -650,38 +648,6 @@ function init() {
     addLeaver(prev);
     showInfo(next);
     animateTo(zoomTarget(next), SEEK_MS); // the camera flies along the wall; both photos ride over the veil
-  }
-  /** Full screen: the next photo slides in over the last one, as in a photo viewer. Nothing
-   *  changes until it has decoded; if it fails, the current photo simply stays. */
-  function seekDetail(dir: Dir) {
-    const old = detail!, next = neighbour(zoomed!, dir);
-    if (!next) return;
-    const m = coverScale(next), W = next.item.pw * m, H = next.item.ph * m;
-    const sl = (W - vw) / 2, st = (H - vh) / 2;
-    const { d, ready } = makeDetail(next, m);
-    incoming = d;
-    const slide = reduceMotion ? 0 : SEEK_MS;
-    const off = (k: number) => `translate(${dir.x * k * 100}%, ${dir.y * k * 100}%)`;
-    d.style.transform = off(1);
-    d.style.transition = `transform ${slide}ms cubic-bezier(0.2, 0.8, 0.2, 1)`;
-    showWhenReady(d, ready, () => incoming === d, sl, st, () => {
-      incoming = null;
-      detail = d;
-      zoomed = next;
-      setFront(next);
-      showInfo(next);
-      // the camera waits behind the overlay on the new photo, ready for the way back out
-      anim = null;
-      Object.assign(view, coverView(next, m, sl, st));
-      raw.x = view.x; raw.y = view.y;
-      dirty = true;
-      void d.offsetWidth; // start from off screen
-      d.style.transform = "";
-      old.style.transition = d.style.transition;
-      old.style.transform = off(-1);
-      slideUntil = performance.now() + slide;
-      window.setTimeout(() => { old.remove(); d.style.transition = ""; }, slide);
-    }, () => { incoming = null; });
   }
   /** The full-screen scroller is already at its edge in that direction (or cannot scroll that way). */
   function atEdge(d: HTMLElement, x: number, y: number) {
@@ -711,41 +677,22 @@ function init() {
     box.append(img);
     d.append(box);
     d.addEventListener("click", leaveDetail);
-    // phones: a swipe that starts with the photo already scrolled to that edge seeks that way
-    let start: { x: number; y: number; edge: (x: number, y: number) => boolean } | null = null;
-    d.addEventListener("touchstart", (e) => {
-      const t = e.touches[0];
-      // which edges it was at when the finger went down (a pan that reaches an edge does not seek)
-      const at = { r: atEdge(d, 1, 0), l: atEdge(d, -1, 0), b: atEdge(d, 0, 1), t: atEdge(d, 0, -1) };
-      const edge = (x: number, y: number) => (x > 0 ? at.r : x < 0 ? at.l : y > 0 ? at.b : at.t);
-      start = e.touches.length === 1 ? { x: t.clientX, y: t.clientY, edge } : null; // not a pinch
-    }, { passive: true });
-    d.addEventListener("touchcancel", () => { start = null; }, { passive: true });
-    d.addEventListener("touchend", (e) => {
-      const t = e.changedTouches[0];
-      if (!start || detail !== d) return;
-      const dir = swipeDir(t.clientX - start.x, t.clientY - start.y);
-      if (dir && start.edge(dir.x, dir.y)) seek(dir);
-      start = null;
-    }, { passive: true });
     const ready = img.decode().then(() => true, () => img.naturalWidth > 0);
     return { d, ready };
   }
   /** Put an overlay on screen once its photo is decoded (Safari would show low-resolution tiles
    *  while it paints), if it is still wanted. */
-  function showWhenReady(d: HTMLDivElement, ready: Promise<boolean>, wanted: () => boolean, sl: number, st: number, shown?: () => void, failed?: () => void) {
+  function showWhenReady(d: HTMLDivElement, ready: Promise<boolean>, wanted: () => boolean, sl: number, st: number, failed?: () => void) {
     ready.then((ok) => {
       if (!wanted()) return;
       if (!ok) { failed?.(); return; }
       document.body.append(d);
       d.scrollTo(sl, st);
       d.focus({ preventScroll: true });
-      shown?.();
     });
   }
-  /** Every full-screen overlay, including one still sliding out or still decoding. */
+  /** The full-screen overlay, shown or still decoding. */
   function removeOverlays() {
-    incoming = null;
     document.querySelectorAll(".detail").forEach((x) => x.remove());
   }
 
@@ -765,7 +712,7 @@ function init() {
     const { d, ready } = makeDetail(h, m); // decodes during the flight
     detail = d;
     // until it shows, the wall's own photo stays; a failed image steps back
-    window.setTimeout(() => showWhenReady(d, ready, () => detail === d, sl, st, undefined, leaveDetail), reduceMotion ? 0 : FOCUS_MS);
+    window.setTimeout(() => showWhenReady(d, ready, () => detail === d, sl, st, leaveDetail), reduceMotion ? 0 : FOCUS_MS);
   }
   function leaveDetail() {
     const d = detail, h = zoomed;

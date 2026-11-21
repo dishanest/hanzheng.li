@@ -7,9 +7,12 @@
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
-    "thumbs": "python3 scripts/thumbs.py"
+    "thumbs": "python3 scripts/thumbs.py",
+    "og-cards": "node scripts/og-cards.mjs",
+    "og-worker": "npx wrangler@4 deploy -c og-worker/wrangler.jsonc"
   },
   "devDependencies": {
+    "puppeteer-core": "^23.11.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.6"
   }

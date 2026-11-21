@@ -1,0 +1,7 @@
+{
+  "name": "hanzheng-og",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false,
+  "routes": [{ "pattern": "og.hanzheng.li", "custom_domain": true }]
+}

@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Han Li</title>
     <meta name="description" content="Han Li - software engineer and photographer in New York. Building roze.ai." />
     <!-- share card: og-worker/ serves a random landscape from public/og/ on each fetch -->
@@ -23,13 +23,13 @@
     <style>
       /* HAN LI outline is 3248.4 x 710: full width, cut at the baseline (the point of the N is cropped), 1px past the bottom so a fractional height never leaves a hairline gap */
       :root { --name-h: calc(100vw * 0.218569); }
-      /* the page itself scrolls the wall (no scrollbars: it pans like a canvas) */
-      html, body { margin: 0; background: #fff; scrollbar-width: none; }
-      html::-webkit-scrollbar { display: none; }
+      html, body { margin: 0; height: 100%; background: #fff; overflow: hidden; }
+      /* iOS Safari only lets a page draw under the status bar and the toolbar once it has scrolled:
+         give the document scroll room and park it part way down (see main.ts) */
+      html.bleed, html.bleed body { height: auto; overflow: visible; }
       .name { position: fixed; left: 0; bottom: -1px; display: block; width: 100vw; height: var(--name-h); fill: #fff; mix-blend-mode: difference; pointer-events: none; z-index: 2; }
     </style>
     <script>
-      // iOS phones: the name sinks further when a photo is focused, past the toolbar (style.css)
       if (CSS.supports("-webkit-touch-callout", "none") && Math.min(screen.width, screen.height) < 600) document.documentElement.classList.add("bleed");
       // wide screens: the name fills the bottom only for the opening, then shrinks to the corner
       else if (innerWidth >= 700) document.documentElement.classList.add("desk");
@@ -47,6 +47,8 @@
       <p class="photo" id="photo-info" aria-live="polite"></p>
     </div>
 
-    <div id="scroller" tabindex="-1"><main id="wall" aria-label="A wall of framed photographs by Han Li"></main></div>
+    <main id="fallback">
+      <ul id="photo-list"></ul>
+    </main>
   </body>
 </html>

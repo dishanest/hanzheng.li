@@ -1,693 +1,739 @@
-// The wall is plain HTML that the page itself scrolls, so panning, momentum and the edge
-// rubber band are the browser's own (they track the fingers, which a page cannot see).
-// Only the two zooms are scripted: the opening (whole wall to the resting view) and a focused
-// photo. Both are a transform on #wall while page scrolling is locked.
+import * as THREE from "three";
 import { photos, openingPhoto } from "./photos";
 import { layout } from "./layout";
-import { frame } from "./frames";
+import { makeMaterials } from "./frames";
+import { hang, updateLift, photoBleed, PHOTO_Z, type Hung } from "./wall";
 
-const root = document.documentElement;
-history.scrollRestoration = "manual"; // the opening sets the scroll position itself
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const coarse = matchMedia("(pointer: coarse)").matches;
-const wall = document.getElementById("wall")!; // holds the scroll size, never transformed
-// The wall scrolls in #scroller, a fixed layer under the name, so the name and caption stay put
-// while the wall rubber-bands (a scrolling page drags its fixed elements along on a Mac). iOS
-// phones scroll the page itself instead: only page content is drawn under Safari's bars there.
-const bleed = root.classList.contains("bleed");
-const scroller = document.getElementById("scroller")!;
-/** Arrow, space and page keys scroll whatever has focus: on desktop that must be #scroller. */
-const focusScroller = () => { if (!bleed && !zoomed) scroller.focus({ preventScroll: true }); };
-const sc = {
-  get x() { return bleed ? window.scrollX : scroller.scrollLeft; },
-  get y() { return bleed ? window.scrollY : scroller.scrollTop; },
-  to(x: number, y: number) { if (bleed) window.scrollTo(x, y); else scroller.scrollTo(x, y); },
-};
-// the frames hang on this; the zooms transform it (transforming #wall itself would shrink what
-// the page can scroll, and the browser would clamp the scroll position)
-const hangEl = document.createElement("div");
-hangEl.className = "hang";
-wall.append(hangEl);
-const captionEl = document.getElementById("caption")!;
 const photoInfo = document.getElementById("photo-info")!;
+const captionEl = document.getElementById("caption")!;
 
+// ---------- accessible + fallback content ----------
+const describe = (p: (typeof photos)[number]) =>
+  [p.title, p.camera, p.film ? `${p.film} film` : "", p.place, String(p.year)].filter(Boolean).join(", ") || "Photograph";
+// Images only get a src when the fallback is shown, so the WebGL page does not fetch every photo twice.
+const list = document.getElementById("photo-list")!;
+for (const p of photos) {
+  const li = document.createElement("li");
+  li.innerHTML = `<img data-src="${import.meta.env.BASE_URL}photos/${p.file}" alt="${describe(p)}" width="${p.w}" height="${p.h}"><span>${describe(p)}</span>`;
+  list.appendChild(li);
+}
+
+let stopped = false; // set when the fallback takes over, ends the render loop
+// iOS phones: the canvas extends under the status bar and toolbar (see resize() in init)
+const bleed = document.documentElement.classList.contains("bleed");
+const BLEED_TOP = 100, BLEED_BOTTOM = 140, PARK = 200; // CSS px
+const BLEED_TOP_PX = bleed ? BLEED_TOP : 0;
 // wide screens: the name fills the bottom for the opening, then shrinks into the corner (style.css)
-const desk = root.classList.contains("desk");
+const desk = document.documentElement.classList.contains("desk");
 let settled = !desk; // phones keep the full-width name throughout
 /** `now`: the user took over, so the bio shows at once instead of after the name has shrunk. */
 function settle(now = false) {
-  if (now) root.classList.add("settled-now");
+  if (now) document.documentElement.classList.add("settled-now");
   if (settled) {
     // the bio is still waiting out its fade-in delay: show it now (a changed delay does not
     // reach a transition that has already started, so restart it with none)
-    if (now) { captionEl.style.transition = "none"; void captionEl.offsetWidth; captionEl.style.transition = ""; }
+    if (now) { const c = document.getElementById("caption")!; c.style.transition = "none"; void c.offsetWidth; c.style.transition = ""; }
     return;
   }
   settled = true;
-  root.classList.add("settled");
+  document.documentElement.classList.add("settled");
 }
 
-// ---------- frames ----------
-const describe = (p: (typeof photos)[number]) =>
-  [p.title, p.camera, p.film ? `${p.film} film` : "", p.place, String(p.year)].filter(Boolean).join(", ") || "Photograph";
+function showFallback(why: unknown) {
+  console.warn("Showing the plain gallery:", why);
+  document.documentElement.classList.add("no-webgl");
+  document.documentElement.classList.remove("zoomed");
+  // undo the iOS full-bleed scroll setup: the plain gallery scrolls normally
+  document.documentElement.classList.remove("bleed", "desk", "settled", "settled-now"); // the plain gallery keeps its own layout
+  document.body.style.height = "";
+  window.scrollTo(0, 0);
+  stopped = true;
+  document.getElementById("wall")?.remove();
+  list.querySelectorAll<HTMLImageElement>("img[data-src]").forEach((img) => { img.loading = "lazy"; img.src = img.dataset.src!; });
+}
 
-const { items, bounds } = layout(photos, openingPhoto, !desk);
-/** Wall units visible top to bottom. Laptop: about a third of the height per frame;
- *  phone portrait: 2-3 frames across. */
-const unitsTall = (w: number, h: number) => (w / h < 0.8 ? (820 * h) / w : 1150);
-// The wall loads small copies (scripts/thumbs.py); the full export loads when a photo is
-// focused or hovered. Large screens that would show a small copy soft swap in the full ones
-// after the opening, so the first view still loads fast.
-const SMALL_PX = 640;
-const photoUrl = (file: string, full: boolean) =>
-  `${import.meta.env.BASE_URL}photos/${full ? file : `sm/${file.replace(/\.jpg$/, ".webp")}`}`;
-const restingDevicePx = (innerHeight / unitsTall(innerWidth, innerHeight)) * devicePixelRatio;
-const wallW = bounds.maxX - bounds.minX, wallH = bounds.maxY - bounds.minY; // wall units
-wall.style.setProperty("--W", String(wallW));
-wall.style.setProperty("--H", String(wallH));
-wall.style.setProperty("--fw", String(frame.width));
+try {
+  init();
+} catch (err) {
+  showFallback(err);
+}
 
-const frames = items.map((it) => {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.className = "frame";
-  b.setAttribute("aria-label", describe(it.photo));
-  const set = (k: string, v: number | string) => b.style.setProperty(k, String(v));
-  set("--x", it.x - it.outerW / 2 - bounds.minX);
-  set("--y", bounds.maxY - it.y - it.outerH / 2);
-  set("--w", it.outerW);
-  set("--h", it.outerH);
-  set("--pw", it.pw);
-  set("--ph", it.ph);
-  set("--avg", it.photo.avg);
-  const img = new Image();
-  img.alt = "";
-  img.decoding = "async";
-  img.width = it.photo.w; img.height = it.photo.h;
-  img.src = photoUrl(it.photo.file, false);
-  if (it.photo.mat > 0) img.className = "matted";
-  b.append(img);
-  hangEl.append(b);
-  const soft = Math.max(it.pw, it.ph) * restingDevicePx > SMALL_PX * 1.1;
-  return { el: b, img, item: it, soft, hiRes: null as Promise<void> | null };
-});
+function init() {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  if (!renderer.capabilities.isWebGL2) throw new Error("WebGL2 required");
 
-// ---------- sizes ----------
-let vw = 1, vh = 1;
-let k = 1; // css px per wall unit at the resting scale
-let topPx = 0;
-let reserveFull = 0; // full-width name (+ caption row on phones), css px
-let reserveSmall = 0; // wide screens once settled: the corner name and the bio beside it, css px
-let reserveFocused = 0; // room the caption needs while a photo is focused
-const reserve = (s = settled) => (s ? reserveSmall : reserveFull);
+  // ---------- renderer, scene, camera ----------
+  const canvas = renderer.domElement;
+  canvas.id = "wall";
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute("aria-label", "A wall of framed photographs by Han Li");
+  canvas.tabIndex = 0;
+  document.body.prepend(canvas);
+  renderer.setClearColor(0xffffff, 1);
+  canvas.addEventListener("webglcontextlost", (e) => { e.preventDefault(); showFallback("WebGL context lost"); });
 
-/** --pad (style.css) in px: a clamp(), so it is resolved by letting the browser lay out a probe. */
-const padProbe = document.createElement("div");
-padProbe.style.cssText = "position:absolute;visibility:hidden;width:var(--pad)";
-document.body.append(padProbe);
-const pad = () => padProbe.offsetWidth;
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xffffff);
+  // Gallery lighting: one key from high upper-left at a raking angle, so the frame edges and mat
+  // bevels get real light-to-dark gradients, plus a soft fill.
+  renderer.toneMapping = THREE.NeutralToneMapping; // filmic roll-off that keeps base colours
+  const key = new THREE.DirectionalLight(0xfffaf4, 3.0);
+  key.position.set(-0.55, 0.83, 0.55);
+  scene.add(key);
+  const fill = new THREE.HemisphereLight(0xffffff, 0xf0eeea, 0.45);
+  scene.add(fill);
+  key.layers.enable(1); fill.layers.enable(1); // they light the focused frame's own layer too
 
-function measure() {
-  vw = bleed ? root.clientWidth : scroller.clientWidth; vh = window.innerHeight;
-  k = vh / unitsTall(vw, vh);
-  topPx = Math.min(vw, vh) * 0.06;
-  // full-width height (index.html; wide screens inset it by --pad on each side, style.css)
-  const nameH = desk ? (vw - 2 * pad()) * 0.218569 + pad() : vw * 0.218569;
-  const lineH = parseFloat(getComputedStyle(captionEl).lineHeight) || 19;
-  if (desk) {
-    const smallH = parseFloat(getComputedStyle(root).getPropertyValue("--name-small-h")) || 60;
-    reserveFull = nameH + 14;
-    root.style.setProperty("--name-k", String((smallH * 4.57521) / (innerWidth - 2 * pad()))); // style.css --name-small-w
-    reserveSmall = Math.max(smallH, lineH * 3) + 18;
-    reserveFocused = reserveSmall + (coarse ? 30 : 0); // tablets: home-indicator inset
-    centreBio();
-  } else {
-    reserveFull = reserveSmall = nameH + 14 + lineH * 3 + 18;
-    reserveFocused = Math.min(26, Math.max(14, vw * 0.02)) + lineH * 3 + 18 + (coarse ? 30 : 0);
+  const FOV = 14;
+  const camera = new THREE.PerspectiveCamera(FOV, 1, 10, 20000);
+  const tanHalf = Math.tan(THREE.MathUtils.degToRad(FOV / 2));
+
+  THREE.Cache.enabled = true;
+  const loader = new THREE.TextureLoader();
+  const maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  const mats = makeMaterials(loader);
+  const { items, bounds } = layout(photos, openingPhoto, !desk);
+  let dirty = true;
+  const hung: Hung[] = hang(items, mats, loader, maxAniso, () => { dirty = true; });
+  for (const h of hung) { scene.add(h.group); scene.add(h.shadow); }
+  // the wall fades in once its textures are in (or after 4 s, whichever is first)
+  let assetsReady = false, shownWall = false;
+  THREE.DefaultLoadingManager.onLoad = () => { assetsReady = true; dirty = true; };
+  setTimeout(() => { assetsReady = true; dirty = true; }, 4000);
+  THREE.DefaultLoadingManager.onProgress = () => { dirty = true; };
+
+  // ---------- view state ----------
+  let vw = 1, vh = 1, dpr = 1;
+  let nameH = 0; // on-screen height of HAN LI, css px
+  let reserveFull = 0; // full-width name (+ caption row on phones), css px
+  let reserveSmall = 0; // wide screens once settled: the corner name and the bio beside it, css px
+  const reserve = (s = settled) => (s ? reserveSmall : reserveFull); // room kept clear at the bottom
+  let reserveFocused = 0; // caption only, css px
+  const view = { x: 0, y: 0, vis: 1150 }; // vis = wall units visible vertically
+  const raw = { x: 0, y: 0 }; // position the input drives, kept inside the bounds (no overscroll)
+  let baseVis = 1150;
+  let lastInput = 0;
+  let zoomed: Hung | null = null;
+  // `to.x/y` undefined = only zoom animates, panning stays live
+  let anim: { from: typeof view; to: { x?: number; y?: number; vis: number }; t0: number; dur: number; smooth?: boolean } | null = null;
+  let introTo: { x: number; y: number; vis: number } | null = null; // resting view the opening zoom lands on
+  let mouse: { x: number; y: number } | null = null;
+
+  function overviewVis() {
+    // laptop: about a third of the height per frame; phone portrait: 2-3 frames across
+    return vw / vh < 0.8 ? (820 * vh) / vw : 1150;
   }
-  wall.style.setProperty("--k", String(k));
-  // let the wall scroll up past whatever covers the bottom of the screen
-  wall.style.setProperty("--reserve", `${reserveFull}px`);
-}
+  function unitsPerPx(vis = view.vis) { return vis / vh; }
 
-/** Put the bio's last baseline on the name's baseline (--pad above the bottom on wide screens).
- *  Measured with a zero-size inline box, which sits exactly on the text's baseline. */
-function centreBio() {
-  const bio = captionEl.querySelector<HTMLElement>(".bio")!;
-  const probe = document.createElement("span");
-  probe.style.cssText = "display:inline-block;width:0;height:0";
-  bio.append(probe);
-  const drop = bio.getBoundingClientRect().bottom - probe.getBoundingClientRect().bottom; // box bottom below the baseline
-  probe.remove();
-  if (Number.isFinite(drop)) captionEl.style.setProperty("--bio-bottom", `${pad() + (coarse ? 14 : 0) - drop}px`);
-}
-
-// ---------- views ----------
-// A view puts wall point p (css px on the unscaled wall) at screen point q, at scale s.
-// #wall then gets translate(q + scroll - s*p) scale(s), with its origin at the top left.
-type View = { px: number; py: number; qx: number; qy: number; s: number };
-
-const centreOf = (it: (typeof items)[number]) => ({ x: (it.x - bounds.minX) * k + wall.offsetLeft, y: (bounds.maxY - it.y) * k });
-const opening = frames.find((f) => f.item.photo.file === openingPhoto) ?? frames[0];
-
-/** The plain scrolled page: no transform. */
-function identity(): View {
-  const qx = vw / 2, qy = vh / 2;
-  return { px: qx + sc.x - wall.offsetLeft, py: qy + sc.y, qx, qy, s: 1 };
-}
-/** Scroll position that centres the opening photo above the bottom row (as it is once settled). */
-function restingScroll() {
-  const c = centreOf(opening.item);
-  const maxX = Math.max(0, wallW * k - vw), maxY = Math.max(0, wallH * k + reserveFull - vh);
-  return {
-    x: Math.max(0, Math.min(maxX, c.x - vw / 2)),
-    y: Math.max(0, Math.min(maxY, c.y - (topPx + vh - reserve(true)) / 2)),
-  };
-}
-/** The whole wall, in the space above the full-width name. */
-function wholeWall(): View {
-  const availW = vw - topPx * 2, availH = Math.max(vh * 0.3, vh - topPx * 2 - reserveFull);
-  const s = Math.min(availW / (wallW * k), availH / (wallH * k));
-  return { px: (wallW * k) / 2, py: (wallH * k) / 2, qx: vw / 2, qy: topPx + availH / 2, s };
-}
-// null: no transform, the page scrolls. While a tween runs this is its end view (tweenView has the view on screen).
-let current: View | null = null;
-function apply(v: View | null) {
-  current = v;
-  hangEl.style.transform = v ? transformOf(v) : "";
-}
-
-const transformOf = (v: View) =>
-  `translate(${v.qx + sc.x - wall.offsetLeft - v.s * v.px}px, ${v.qy + sc.y - v.s * v.py}px) scale(${v.s})`;
-let tween: Animation | null = null;
-let tweenView: (() => View) | null = null; // the view on screen now, while a tween runs
-/** Animate between views: scale moves in log space so the zoom runs at an even visual rate.
- *  A Web Animation of sampled keyframes, not a per-frame style write: Safari then runs the zoom
- *  on the compositor, and does not draw the wall again at each new scale. */
-function animate(from: View | null, to: View, dur: number, smooth: boolean, done?: () => void) {
-  from = stopTween() ?? from ?? to; // a running tween: start where it is on screen now
-  if (reduceMotion || dur <= 0) { apply(to); done?.(); return; }
-  const f = from;
-  const at = (t: number): View => {
-    const e = smooth ? (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2) : 1 - Math.pow(1 - t, 3);
-    const lerp = (a: number, b: number) => a + (b - a) * e;
-    return { px: lerp(f.px, to.px), py: lerp(f.py, to.py), qx: lerp(f.qx, to.qx), qy: lerp(f.qy, to.qy), s: f.s * Math.pow(to.s / f.s, e) };
-  };
-  const N = Math.max(30, Math.round(dur / 10)); // dense, so the straight runs between keyframes stay on the curve
-  const keys = Array.from({ length: N + 1 }, (_, i) => ({ transform: transformOf(at(i / N)) }));
-  apply(to); // underneath the animation, so its end shows no jump
-  const a = hangEl.animate(keys, { duration: dur, easing: "linear" });
-  tween = a;
-  tweenView = () => at(Math.min(1, Number(a.currentTime ?? 0) / dur));
-  a.onfinish = () => {
-    if (tween !== a) return;
-    tween = null; tweenView = null;
-    done?.();
-  };
-}
-/** Stop a running tween where it is on screen, and return that view. */
-function stopTween(): View | null {
-  if (!tween) return null;
-  const v = tweenView!();
-  tween.cancel(); tween = null; tweenView = null;
-  apply(v);
-  return v;
-}
-
-// ---------- opening ----------
-const nameEl = document.querySelector<SVGSVGElement>(".name")!;
-let phase: "waiting" | "intro" | "free" = "waiting";
-function startOpening() {
-  measure();
-  const rest = restingScroll();
-  sc.to(rest.x, rest.y);
-  focusScroller();
-  if (reduceMotion) { finishOpening(); return; }
-  root.classList.add("locked");
-  if (!coarse) {
-    // one composited layer for the zoom, drawn at full size first: the browser then scales a
-    // finished picture instead of repainting 50 frames and their shadows every frame, and it
-    // stays sharp as it grows (a layer first drawn zoomed out would be blurry when it lands)
-    hangEl.style.willChange = "transform";
-    requestAnimationFrame(() => requestAnimationFrame(() => { if (phase !== "free" && !current) apply(wholeWall()); }));
-    return;
-  }
-  apply(wholeWall());
-}
-function runOpening() {
-  if (phase !== "waiting") return;
-  phase = "intro";
-  window.setTimeout(() => {
-    if (phase !== "intro") return;
-    const from = current ?? wholeWall(); // photos came from cache before the zoomed-out view was set
-    settle();
-    animate(from, identity(), 1800, true, finishOpening);
-  }, 1100);
-}
-function finishOpening() {
-  phase = "free";
-  if (tween) { tween.cancel(); tween = null; tweenView = null; }
-  apply(null);
-  hangEl.style.willChange = "";
-  root.classList.remove("locked");
-  settle();
-  focusScroller();
-  if (desk) upgradeSoft();
-}
-/** The user took over during the opening: land on the resting view straight away. */
-function interruptOpening() {
-  if (phase === "free") return false;
-  const from = tweenView ? tweenView() : current;
-  phase = "free";
-  settle(true);
-  if (from && !reduceMotion) animate(from, identity(), 350, false, finishOpening);
-  else finishOpening();
-  return true;
-}
-
-// the wall fades in once its photos are in (or after 4 s, whichever is first)
-let pending = frames.length;
-let revealed = false;
-const reveal = () => {
-  if (revealed) return;
-  revealed = true;
-  // photos from cache can arrive before the zoomed-out view is set: set it before showing the wall
-  if (phase === "waiting" && !current && !reduceMotion) apply(wholeWall());
-  // two frames on, so the hidden wall is drawn first: else the fade has no start and is skipped
-  requestAnimationFrame(() => requestAnimationFrame(() => { root.classList.add("loaded"); runOpening(); }));
-};
-for (const f of frames) {
-  const done = () => { f.img.classList.add("in"); if (--pending <= 0) reveal(); };
-  // decoded, not just loaded: the opening zoom then never waits on a decode
-  f.img.decode().then(done, done);
-}
-window.setTimeout(reveal, 4000);
-
-// ---------- focus ----------
-// Clicking a frame brings it to the centre while every other frame flies outward from it and
-// fades, leaving the photo alone above the name and its details. Scrolling does nothing there.
-// Clicking the photo again opens it full screen in its own native scroller (pan with the
-// browser's own momentum and edge bounce); clicking that, or anywhere off the photo, steps back.
-type Frame = (typeof frames)[number];
-let zoomed: Frame | null = null;
-let peeking = false; // focused, and the pointer is off the photo
-let peekUntil = 0;
-let detail: HTMLDivElement | null = null;
-const FOCUS_MS = 300; // the focused frame's transition in style.css (.frame) matches this
-let busyUntil = 0; // a focus move is running: clicks wait for it (they would read moving rects)
-const busy = () => performance.now() < busyUntil;
-let movingTimer = 0, idleTimer = 0, bigTimer = 0;
-/** A focus move starts: clicks wait for it, frames get their own layers, the hover peek pauses. */
-function startMove() {
-  busyUntil = performance.now() + FOCUS_MS + 60; // + the two frames a still() swap takes
-  root.classList.add("moving");
-  root.classList.remove("focus-idle");
-  clearTimeout(movingTimer); clearTimeout(idleTimer); clearTimeout(bigTimer);
-  movingTimer = window.setTimeout(() => root.classList.remove("moving"), 650); // the others' 0.55 s
-  // sharpen as soon as the focused frame stops; the others can still be drifting away
-  bigTimer = window.setTimeout(() => {
-    if (zoomed && !detail && desk) setBig(zoomed); // phones: no hover peek, and a large layer costs memory
-  }, reduceMotion ? 0 : FOCUS_MS + 40); // + the frame the transition can start late
-  idleTimer = window.setTimeout(() => {
-    if (zoomed && !detail) root.classList.add("focus-idle");
-  }, 600);
-}
-
-/** Untransformed screen rect of a frame at the wall's scale (its place on the scrolled page). */
-function homeRect(f: Frame, u = k) {
-  const w = wall.getBoundingClientRect(), it = f.item;
-  return {
-    x: w.left + (it.x - it.outerW / 2 - bounds.minX) * u, y: w.top + (bounds.maxY - it.y - it.outerH / 2) * u,
-    w: it.outerW * u, h: it.outerH * u,
-  };
-}
-/** Where a focused frame sits: as large as fits above the caption row, centred in that space. */
-function focusTarget(f: Frame) {
-  const t = Math.min(vw, vh) * 0.06;
-  const availH = Math.max(vh * 0.3, vh - t - reserveFocused - 12), availW = vw - t * 2;
-  const r = homeRect(f);
-  const s = Math.min(availW / r.w, availH / r.h);
-  return { r, s, cx: vw / 2, cy: t + availH / 2 };
-}
-// A frame scaled up by transform is drawn at its small size and magnified, so it blurs whenever
-// it animates. Once a focus move has finished, the focused frame is laid out at its focused size
-// instead (its own --u), with no scale: then the hover peek shrinks a sharp picture.
-let bigFrame: Frame | null = null;
-let bigU = 0; // the big frame's --u
-/** css px per wall unit the frame is laid out at now */
-const unitOf = (f: Frame) => (bigFrame === f ? bigU : k);
-/** Change a frame's transform with no transition. The transition comes back two frames later:
- *  Safari animates from the last painted value if it is restored in the same frame. */
-const stillCount = new Map<Frame, number>(); // overlapping still() calls on one frame
-function still(f: Frame, change: () => void) {
-  stillCount.set(f, (stillCount.get(f) ?? 0) + 1);
-  f.el.classList.add("still");
-  change();
-  getComputedStyle(f.el).transform;
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    const n = (stillCount.get(f) ?? 1) - 1;
-    stillCount.set(f, n);
-    if (n <= 0) f.el.classList.remove("still");
-  }));
-}
-/** Lay the focused frame out at its focused size (sharp), from scaled-up; looks the same. */
-function setBig(f: Frame) {
-  if (bigFrame === f) return;
-  still(f, () => { bigFrame = f; placeFocused(f, peeking, true); });
-}
-/** Back to the wall's scale, with no visible change (after it has been moved home). */
-function unBig(f: Frame) {
-  if (bigFrame !== f) return;
-  still(f, () => { bigFrame = null; f.el.style.removeProperty("--u"); f.el.style.transform = ""; });
-}
-/** `peek`: the pointer is off the photo, so the others edge back in and the photo gives way a little. */
-function placeFocused(f: Frame, peek = false, onlyFocused = false) {
-  const { r, s: fit, cx, cy } = focusTarget(f);
-  const fx = r.x + r.w / 2, fy = r.y + r.h / 2;
-  if (bigFrame === f) {
-    bigU = k * fit;
-    f.el.style.setProperty("--u", `${bigU}px`);
-    const b = homeRect(f, bigU);
-    f.el.style.transform = `translate(${cx - (b.x + b.w / 2)}px, ${cy - (b.y + b.h / 2)}px) scale(${peek ? 0.965 : 1})`;
-  } else {
-    f.el.style.transform = `translate(${cx - fx}px, ${cy - fy}px) scale(${peek ? fit * 0.965 : fit})`;
-  }
-  if (onlyFocused) return;
-  // the rest drift outward from it, a little larger, while they fade: out of its way, not off
-  // the screen in one jump (as in the reference video)
-  const push = (0.35 + (fit - 1) * 0.25) * (peek ? 0.9 : 1);
-  for (const g of frames) {
-    if (g === f) continue;
-    const q = homeRect(g), gx = q.x + q.w / 2, gy = q.y + q.h / 2;
-    g.el.style.transform = `translate(${cx - fx + (gx - fx) * push}px, ${cy - fy + (gy - fy) * push}px) scale(1.15)`;
-  }
-}
-
-const stop = (t: string) => (!t || /[.!?]$/.test(t) ? t : `${t}.`); // end a phrase with one period
-function showInfo(f: Frame) {
-  // title / camera · stock / place, year, skipping whatever is not filled in yet
-  const p = f.item.photo;
-  const lines = [
-    p.title ? `<em>${p.title}</em>` : "",
-    [p.camera, p.film].filter(Boolean).map(stop).join(" "),
-    stop([p.place, p.year].filter(Boolean).join(", ")),
-  ].filter(Boolean);
-  photoInfo.innerHTML = lines.join("<br>");
-}
-/** Swap in the full export once it is loaded and decoded, so the swap shows no gap. */
-function loadFull(f: Frame) {
-  if (!f.hiRes) {
-    const url = photoUrl(f.item.photo.file, true);
-    const im = new Image();
-    im.src = url;
-    // swapped once any focus move is over: a new picture mid-move repaints the moving frame.
-    // The closure keeps `im` alive, so its decoded picture is still there at the swap.
-    const swap = () => {
-      if (busy()) window.setTimeout(swap, busyUntil - performance.now());
-      else { f.img.src = url; void im; }
+  function limits(vis = view.vis, s = settled) {
+    const halfW = (vis * vw) / vh / 2, halfH = vis / 2;
+    // the name and caption cover the bottom of the screen; let the wall scroll up past them
+    const nameUnits = reserve(s) * unitsPerPx(vis);
+    const lim = {
+      minX: bounds.minX + halfW, maxX: bounds.maxX - halfW,
+      // on iOS the wall also shows under the status bar: keep the top margin visible there too
+      minY: bounds.minY + halfH - nameUnits, maxY: bounds.maxY - halfH - BLEED_TOP_PX * unitsPerPx(vis),
+      halfW, halfH,
     };
-    // Safari's decode() can reject a good image: swap anyway if it loaded, else allow a retry
-    f.hiRes = im.decode().then(swap, () => { if (im.naturalWidth) swap(); else f.hiRes = null; });
+    if (lim.minX > lim.maxX) lim.minX = lim.maxX = (bounds.minX + bounds.maxX) / 2;
+    if (lim.minY > lim.maxY) lim.minY = lim.maxY = (bounds.minY + bounds.maxY) / 2;
+    return lim;
   }
-  return f.hiRes;
-}
-/** Large screens: swap in the full exports, nearest the screen centre first, two at a time,
- *  so the downloads and decodes do not all land while the user starts to pan. */
-let upgrading = false;
-function upgradeSoft() {
-  if (upgrading) return;
-  upgrading = true;
-  const cx = vw / 2, cy = vh / 2;
-  const queue = frames.filter((f) => f.soft && !f.hiRes)
-    .map((f) => { const r = homeRect(f); return { f, d: Math.hypot(r.x + r.w / 2 - cx, r.y + r.h / 2 - cy) }; })
-    .sort((a, b) => a.d - b.d).map((q) => q.f);
-  const next = (): unknown => { const f = queue.shift(); return f && loadFull(f).then(next); };
-  next(); next();
-}
-// a pressed or resting pointer will likely click: fetch that frame's full export now
-wall.addEventListener("pointerdown", (e) => {
-  const f = frames.find((x) => x.el === (e.target as HTMLElement).closest(".frame"));
-  if (f) loadFull(f);
-});
-let hoverTimer = 0;
-wall.addEventListener("pointerover", (e) => {
-  if (e.pointerType !== "mouse" || zoomed) return;
-  const f = frames.find((x) => x.el === (e.target as HTMLElement).closest(".frame"));
-  clearTimeout(hoverTimer);
-  if (f && !f.hiRes) hoverTimer = window.setTimeout(() => loadFull(f), 150);
-});
-wall.addEventListener("pointerout", () => clearTimeout(hoverTimer));
-function focusOn(f: Frame) {
-  requestAnimationFrame(() => requestAnimationFrame(() => loadFull(f))); // not in the move's first frame
-  if (phase !== "free" || tween !== null) finishOpening();
-  if (bigFrame && bigFrame !== f) unBig(bigFrame); // still shrinking home from the last focus
-  for (const g of frames) {
-    if (g !== f) { g.el.classList.remove("focused"); g.el.inert = true; } // hidden frames are not Tab stops
-  }
-  startMove();
-  peeking = false;
-  root.classList.remove("peek");
-  zoomed = f;
-  root.classList.add("locked", "zoomed", "focusing");
-  f.el.classList.add("focused");
-  showInfo(f);
-  placeFocused(f);
-}
-function leaveFocus() {
-  if (!zoomed) return;
-  if (detail) { leaveDetail(); return; }
-  const f = zoomed;
-  zoomed = null;
-  startMove();
-  root.classList.remove("zoomed", "peek", "focus-idle");
-  for (const g of frames) { if (g !== f) g.el.style.transform = ""; g.el.inert = false; }
-  if (bigFrame === f) {
-    // still laid out large: shrink it onto its place on the wall, then drop the large layout
-    const hs = homeRect(f), hb = homeRect(f, bigU);
-    f.el.style.transform = `translate(${hs.x + hs.w / 2 - (hb.x + hb.w / 2)}px, ${hs.y + hs.h / 2 - (hb.y + hb.h / 2)}px) scale(${k / bigU})`;
-  } else f.el.style.transform = "";
-  window.setTimeout(() => {
-    if (zoomed !== f) unBig(f);
-    if (zoomed) return; // focused again meanwhile
-    f.el.classList.remove("focused");
-    root.classList.remove("locked", "focusing");
-    focusScroller();
-  }, reduceMotion ? 0 : FOCUS_MS);
-}
 
-/** Full screen: the photo alone, larger than the screen, in a native scroller. */
-function enterDetail(f: Frame, clickX: number, clickY: number) {
-  startMove();
-  const r = photoRect(f); // on screen now, with the focus transform
-  const cover = Math.max(vw / r.width, vh / r.height);
-  const m = cover; // aspect fill: the photo just covers the screen, panning along its longer side
-  const W = r.width * m, H = r.height * m;
-  // keep the point under the pointer where it is
-  const fx = (clickX - r.left) / r.width, fy = (clickY - r.top) / r.height;
-  const sx = Math.max(0, Math.min(W - vw, fx * W - clickX)), sy = Math.max(0, Math.min(H - vh, fy * H - clickY));
-  // grow the focused frame until its photo covers that rect, then hand over to the scroller.
-  // Works in whichever size the frame is laid out at (large once settled, wall size before).
-  const s = parseScale(f.el), cur = parseTranslate(f.el);
-  const home = homeRect(f, unitOf(f)), hx = home.x + home.w / 2, hy = home.y + home.h / 2;
-  const s2 = s * m;
-  // photo's top left in frame space (relative to the frame's centre, untransformed)
-  const ox = (r.left - (hx + cur.x)) / s, oy = (r.top - (hy + cur.y)) / s;
-  f.el.style.transform = `translate(${-sx - hx - s2 * ox}px, ${-sy - hy - s2 * oy}px) scale(${s2})`;
-  const d = document.createElement("div");
-  d.className = "detail";
-  d.tabIndex = -1; // focusable, so arrow keys scroll it
-  const img = new Image();
-  img.src = photoUrl(f.item.photo.file, true);
-  img.alt = "";
-  img.style.width = `${W}px`; img.style.height = `${H}px`;
-  d.append(img);
-  detail = d;
-  // decoded first, so Safari does not show the overlay's low-resolution tiles while it paints
-  // (at most 500 ms more: a slow decode must not leave the scaled frame on screen)
-  const decoded = Promise.race([img.decode().catch(() => {}), new Promise((r) => setTimeout(r, 500))]);
-  window.setTimeout(() => decoded.then(() => {
-    if (detail !== d) return;
-    document.body.append(d);
-    d.scrollTo(sx, sy);
-    d.focus({ preventScroll: true });
-  }), reduceMotion ? 0 : FOCUS_MS);
-}
-function leaveDetail() {
-  const d = detail, f = zoomed;
-  if (!d || !f) return;
-  detail = null;
-  if (d.isConnected) {
-    // put the frame exactly where the scrolled photo is, then let it settle back
-    const r = photoRect(f), W = d.scrollWidth;
-    const k2 = W / r.width, cur = parseTranslate(f.el), sNow = parseScale(f.el);
-    const home = homeRect(f, unitOf(f)), hx = home.x + home.w / 2, hy = home.y + home.h / 2;
-    const ox = (r.left - (hx + cur.x)) / sNow, oy = (r.top - (hy + cur.y)) / sNow;
-    const s2 = sNow * k2;
-    // put the frame where the scrolled photo is, show it, then let it settle back next frame
-    still(f, () => { f.el.style.transform = `translate(${-d.scrollLeft - hx - s2 * ox}px, ${-d.scrollTop - hy - s2 * oy}px) scale(${s2})`; });
-    d.remove();
-    startMove();
-    requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => { if (zoomed === f && !detail) placeFocused(f, peeking); })));
-    f.el.focus({ preventScroll: true });
-    return;
+  /** --pad (style.css) in px: a clamp(), so it is resolved by letting the browser lay out a probe. */
+  const padProbe = document.createElement("div");
+  padProbe.style.cssText = "position:absolute;visibility:hidden;width:var(--pad)";
+  document.body.append(padProbe);
+  const pad = () => padProbe.offsetWidth;
+  /** Put the bio's last baseline on the name's baseline (--pad above the bottom on wide screens).
+   *  Measured with a zero-size inline box, which sits exactly on the text's baseline. */
+  function centreBio() {
+    const bio = captionEl.querySelector<HTMLElement>(".bio")!;
+    const probe = document.createElement("span");
+    probe.style.cssText = "display:inline-block;width:0;height:0";
+    bio.append(probe);
+    const drop = bio.getBoundingClientRect().bottom - probe.getBoundingClientRect().bottom; // box bottom below the baseline
+    probe.remove();
+    if (Number.isFinite(drop)) captionEl.style.setProperty("--bio-bottom", `${pad() + (coarse ? 14 : 0) - drop}px`);
   }
-  startMove();
-  placeFocused(f);
-  f.el.focus({ preventScroll: true });
-}
-/** The print itself on screen: the img box minus the mat's bevel border. */
-function photoRect(f: Frame) {
-  const r = f.img.getBoundingClientRect();
-  const b = (f.img.offsetWidth - f.img.clientWidth) / 2 * (r.width / f.img.offsetWidth);
-  return { left: r.left + b, top: r.top + b, width: r.width - 2 * b, height: r.height - 2 * b };
-}
-const parseTranslate = (el: HTMLElement) => {
-  const m = /translate\(([-\d.e]+)px, ([-\d.e]+)px\)/.exec(el.style.transform);
-  return { x: m ? +m[1] : 0, y: m ? +m[2] : 0 };
-};
-const parseScale = (el: HTMLElement) => +(/scale\(([-\d.e]+)\)/.exec(el.style.transform)?.[1] ?? 1);
 
-wall.addEventListener("click", (e) => {
-  const el = (e.target as HTMLElement).closest<HTMLElement>(".frame");
-  const f = el && frames.find((x) => x.el === el);
-  if (phase === "waiting" || busy()) return;
-  if (phase === "intro" && !f) { interruptOpening(); return; }
-  if (zoomed) {
-    // a keyboard Enter has no pointer position: zoom on the photo's centre
-    const pr = photoRect(f ?? zoomed);
-    const cx = e.detail === 0 ? pr.left + pr.width / 2 : e.clientX, cy = e.detail === 0 ? pr.top + pr.height / 2 : e.clientY;
-    if (f === zoomed && !detail) {
-      // the photo may still be easing back from the peek: zoom from where it lands
-      const wait = Math.max(0, peekUntil - performance.now());
-      const go = () => { if (zoomed === f && !detail) enterDetail(f, cx, cy); };
-      if (wait) { busyUntil = performance.now() + wait; window.setTimeout(go, wait); } else go();
+  // ---------- resize (batched to one per frame) ----------
+  let resizeQueued = false;
+  function queueResize() {
+    if (resizeQueued) return;
+    resizeQueued = true;
+    requestAnimationFrame(() => {
+      resizeQueued = false;
+      // the corner name's size follows --name-k at once, not by its 1.8 s shrink transition
+      const name = document.querySelector<SVGElement>(".name")!, root = document.documentElement.style;
+      const before = root.getPropertyValue("--name-k");
+      try { resize(); } finally {
+        // a changed corner size applies at once, not by the 1.8 s shrink (which a resize during
+        // the opening must not cut short, so only when the size really changed)
+        if (settled && !anim?.smooth && root.getPropertyValue("--name-k") !== before) {
+          const t = name.style.transition;
+          name.style.transition = "none";
+          void getComputedStyle(name).transform;
+          name.style.transition = t;
+        }
+      }
+    });
+  }
+  // iOS Safari draws only document content (not fixed elements) under the status bar and the
+  // toolbar, and only once the page has scrolled. So there the canvas is absolute, taller than the
+  // layout viewport by BLEED_TOP / BLEED_BOTTOM, and the document is parked a little way down.
+  // The camera still frames the layout viewport; the extra rows just show more wall.
+  function placeCanvas() {
+    if (stopped) return;
+    // a swipe that starts on the caption link can scroll the page: put it back
+    if (Math.abs(window.scrollY - PARK) > 1) window.scrollTo(0, PARK);
+    canvas.style.top = `${window.scrollY - BLEED_TOP}px`;
+  }
+  if (bleed) window.addEventListener("scroll", placeCanvas, { passive: true });
+  function resize() {
+    vw = window.innerWidth; vh = window.innerHeight;
+    // 1.5x: the type is HTML, so the canvas only draws the wall; ~45% fewer pixels than 2x
+    dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    renderer.setPixelRatio(dpr);
+    const top = bleed ? BLEED_TOP : 0, bottom = bleed ? BLEED_BOTTOM : 0;
+    renderer.setSize(vw, vh + top + bottom, false);
+    canvas.style.width = vw + "px"; canvas.style.height = vh + top + bottom + "px";
+    camera.aspect = vw / vh;
+    if (bleed) {
+      camera.setViewOffset(vw, vh, 0, -top, vw, vh + top + bottom);
+      document.body.style.height = `${PARK + vh + bottom + PARK}px`;
+      window.scrollTo(0, PARK);
+      placeCanvas();
     }
-    else leaveFocus();
-    return;
-  }
-  if (f) focusOn(f);
-});
-document.addEventListener("click", (e) => {
-  const t = e.target as HTMLElement;
-  if (t.closest("a") || busy()) return;
-  if (detail && detail.contains(t)) { leaveDetail(); return; }
-  if (zoomed && !wall.contains(t)) leaveFocus();
-});
-
-// while the page is locked (the opening, or a focused photo) scrolling does nothing; during the
-// opening it lands the zoom at once. The full-screen photo scrolls itself. The listeners exist only
-// while locked: a non-passive wheel or touch listener makes the browser wait on script before every
-// native scroll, which is the smoothness this page is built on.
-function onWheel(e: WheelEvent) {
-  if (e.ctrlKey || detail?.contains(e.target as Node)) return;
-  e.preventDefault();
-  interruptOpening();
-}
-function onTouchMove(e: TouchEvent) {
-  if (detail?.contains(e.target as Node)) return;
-  e.preventDefault();
-  interruptOpening();
-}
-new MutationObserver(() => {
-  const on = root.classList.contains("locked");
-  if (on) { window.addEventListener("wheel", onWheel, { passive: false }); window.addEventListener("touchmove", onTouchMove, { passive: false }); }
-  else { window.removeEventListener("wheel", onWheel); window.removeEventListener("touchmove", onTouchMove); }
-}).observe(root, { attributes: true, attributeFilter: ["class"] });
-// hovering off the focused photo hints at the way back: the others edge in, the photo gives way
-window.addEventListener("pointermove", (e) => {
-  if (e.pointerType !== "mouse" || !zoomed || detail || busy()) return;
-  const over = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest(".frame") === zoomed.el;
-  if (over === !peeking) return;
-  peeking = !over;
-  peekUntil = performance.now() + 420; // the peek eases for 0.4 s: the photo's rect is moving
-  root.classList.toggle("peek", peeking);
-  placeFocused(zoomed, peeking);
-});
-root.addEventListener("mouseleave", () => {
-  if (!peeking || !zoomed || detail) return;
-  peeking = false; root.classList.remove("peek"); placeFocused(zoomed);
-});
-
-// Safari on a Mac locks trackpad scrolling to one axis once a swipe leans that way, so a
-// diagonal swipe only moves straight. The wheel events still carry both deltas. Once a frame
-// shows the browser dropped an axis that the swipe clearly has, every following event in that
-// swipe adds that axis itself, as it arrives, so both axes move together each frame. Rubber-
-// banding stays native on the axis Safari kept. (Chrome moves both axes, so nothing is added.)
-let fill: "x" | "y" | null = null; // the axis being added for the current swipe
-let lastWheel = 0, frameSum = { x: 0, y: 0 }, added = { x: 0, y: 0 }, frameFrom: { x: number; y: number } | null = null;
-function insideBounds() {
-  const maxX = scroller.scrollWidth - scroller.clientWidth, maxY = scroller.scrollHeight - scroller.clientHeight;
-  return sc.x >= 0 && sc.y >= 0 && sc.x <= maxX && sc.y <= maxY;
-}
-if (!bleed) scroller.addEventListener("wheel", (e) => {
-  if (e.ctrlKey || e.shiftKey || root.classList.contains("locked") || e.deltaMode !== 0) return;
-  const now = performance.now();
-  if (now - lastWheel > 150) fill = null; // a new swipe
-  lastWheel = now;
-  if (fill && insideBounds()) {
-    const dx = fill === "x" ? e.deltaX : 0, dy = fill === "y" ? e.deltaY : 0;
-    scroller.scrollBy(dx, dy);
-    added.x += dx; added.y += dy;
-  }
-  frameSum.x += e.deltaX; frameSum.y += e.deltaY;
-  if (frameFrom) return;
-  frameFrom = { x: sc.x, y: sc.y };
-  requestAnimationFrame(() => {
-    const moved = { x: sc.x - frameFrom!.x - added.x, y: sc.y - frameFrom!.y - added.y }; // the browser's own share
-    const want = frameSum;
-    frameFrom = null; frameSum = { x: 0, y: 0 }; added = { x: 0, y: 0 };
-    if (root.classList.contains("locked")) return;
-    if (fill) {
-      if (Math.abs(fill === "x" ? moved.x : moved.y) > 0.5) fill = null; // the browser moves it again
+    // full-width height (index.html; wide screens inset it by --pad on each side, style.css)
+    nameH = desk ? (vw - 2 * pad()) * 0.218569 + pad() : vw * 0.218569;
+    const lineH = parseFloat(getComputedStyle(captionEl).lineHeight) || 19;
+    if (desk) {
+      // the opening shows no caption; afterwards the name and the bio share one row at the bottom
+      const smallH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--name-small-h")) || 60;
+      reserveFull = nameH + 14;
+      reserveSmall = Math.max(smallH, lineH * 3) + 18;
+      reserveFocused = reserveSmall + (coarse ? 30 : 0); // tablets: home-indicator inset
+      // the corner name is the full-width one scaled down (style.css): --name-k is that scale
+      document.documentElement.style.setProperty("--name-k", String((smallH * 4.57521) / (vw - 2 * pad())));
+      centreBio();
+    } else {
+      // room for three caption lines above the name, whichever text is showing
+      reserveFull = reserveSmall = nameH + 14 + lineH * 3 + 18;
+      // while a photo is focused the name has sunk away: only the caption (now in the corner) needs room
+      reserveFocused = Math.min(26, Math.max(14, vw * 0.02)) + lineH * 3 + 18 + (coarse ? 30 : 0); // phones: home-indicator inset
+    }
+    baseVis = overviewVis();
+    if (introTo && !anim) { setupOpening(); dirty = true; return; } // opening not started yet: re-plan it for the new size
+    if (anim?.smooth) {
+      // The opening zoom survives resizes (Safari fires one when the web font arrives, which
+      // used to cut the zoom short): re-aim it, and re-plan the start if it has not begun.
+      anim.to = restingView();
+      if (performance.now() < anim.t0) { anim.from = wholeWallView(); Object.assign(view, anim.from); raw.x = view.x; raw.y = view.y; }
+      dirty = true;
       return;
     }
-    // a real diagonal only: the minor axis must be a fair share of the major one, not noise
-    const ax = Math.abs(want.x), ay = Math.abs(want.y);
-    if (ax > 2 && ax > 0.25 * ay && Math.abs(moved.x) < 0.5 && Math.abs(moved.y) > 0.5) fill = "x";
-    else if (ay > 2 && ay > 0.25 * ax && Math.abs(moved.y) < 0.5 && Math.abs(moved.x) > 0.5) fill = "y";
-    // catch up this frame's share so the switch-over does not lag
-    if (fill && insideBounds()) scroller.scrollBy(fill === "x" ? want.x : 0, fill === "y" ? want.y : 0);
+    anim = null;
+    if (detail) { detail.remove(); detail = null; } // the full-screen photo was sized for the old window
+    if (zoomed) Object.assign(view, zoomTarget(zoomed));
+    else view.vis = baseVis;
+    raw.x = view.x; raw.y = view.y;
+    if (!zoomed) { clampRaw(); applyRaw(); }
+    dirty = true;
+  }
+
+  // ---------- panning ----------
+  function applyRaw() {
+    const L = limits();
+    view.x = Math.min(L.maxX, Math.max(L.minX, raw.x));
+    view.y = Math.min(L.maxY, Math.max(L.minY, raw.y));
+    // raw follows the clamp, so a pan past an edge leaves nothing to unwind (the limits move
+    // while a zoom-out runs, and clampRaw only knew the limits at the time of the pan)
+    raw.x = view.x; raw.y = view.y;
+    dirty = true;
+  }
+
+  function panBy(dxPx: number, dyPx: number) {
+    if (zoomed) return; // a focused photo holds still
+    if (anim?.smooth || introTo) {
+      // the user took over during the opening zoom: keep their position, settle the scale
+      anim = null; introTo = null;
+      settle(true);
+      raw.x = view.x; raw.y = view.y;
+      settleRaw();
+      animateTo({ vis: baseVis });
+    }
+    const u = unitsPerPx();
+    raw.x += dxPx * u;
+    raw.y -= dyPx * u;
+    clampRaw(); // the wall stops at its edges: no overscroll
+    lastInput = performance.now();
+    applyRaw();
+  }
+  function clampRaw() {
+    const L = limits();
+    raw.x = Math.min(L.maxX, Math.max(L.minX, raw.x));
+    raw.y = Math.min(L.maxY, Math.max(L.minY, raw.y));
+  }
+  /** Pull raw inside the overview bounds before zooming out to them, so nothing pops. */
+  function settleRaw() {
+    const L = limits(baseVis);
+    raw.x = Math.min(L.maxX, Math.max(L.minX, raw.x));
+    raw.y = Math.min(L.maxY, Math.max(L.minY, raw.y));
+  }
+
+  window.addEventListener("wheel", (e) => {
+    if (stopped || e.ctrlKey || detail) return; // native scrolling: the fallback gallery, the full-screen photo; pinch / ctrl+scroll stays browser zoom
+    e.preventDefault();
+    if (zoomed) return; // a focused photo holds still; click or Escape steps back
+    let dx = e.deltaX, dy = e.deltaY;
+    if (e.deltaMode === 1) { dx *= 16; dy *= 16; } else if (e.deltaMode === 2) { dx *= vw; dy *= vh; }
+    if (e.shiftKey && dx === 0) { dx = dy; dy = 0; } // mouse wheel + Shift pans sideways
+    if (Math.abs(dx) + Math.abs(dy) < 0.01) return;
+    panBy(dx, dy);
+  }, { passive: false });
+
+  // touch: one-finger swipe with momentum; a small slop so taps stay taps
+  const SLOP = 8;
+  let touch: { id: number; x: number; y: number; t: number; vx: number; vy: number; moved: number; panning: boolean } | null = null;
+  let suppressClick = false;
+  let momentum: { vx: number; vy: number } | null = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse") return;
+    touch = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0, moved: 0, panning: false };
+    momentum = null;
+    suppressClick = false;
+    canvas.setPointerCapture(e.pointerId);
   });
-}, { passive: true });
+  canvas.addEventListener("pointermove", (e) => {
+    if (e.pointerType === "mouse") { mouse = { x: e.clientX, y: e.clientY }; hoverAt(e.clientX, e.clientY); return; }
+    if (!touch || e.pointerId !== touch.id) return;
+    const now = performance.now(), dt = Math.max(1, now - touch.t);
+    const dx = e.clientX - touch.x, dy = e.clientY - touch.y;
+    touch.moved += Math.abs(dx) + Math.abs(dy);
+    touch.vx = 0.8 * (-dx / dt) + 0.2 * touch.vx;
+    touch.vy = 0.8 * (-dy / dt) + 0.2 * touch.vy;
+    touch.x = e.clientX; touch.y = e.clientY; touch.t = now;
+    if (!touch.panning && touch.moved < SLOP) return;
+    suppressClick = true; // a drag, not a tap
+    if (zoomed) return; // a focused photo holds still
+    touch.panning = true;
+    panBy(-dx, -dy);
+  });
+  const endTouch = (e: PointerEvent) => {
+    if (!touch || e.pointerId !== touch.id) return;
+    // taps arrive as the click event below
+    if (!reduceMotion && touch.panning && performance.now() - touch.t < 80) momentum = { vx: touch.vx * 16, vy: touch.vy * 16 };
+    touch = null;
+  };
+  canvas.addEventListener("pointerup", endTouch);
+  canvas.addEventListener("pointercancel", endTouch);
+  canvas.addEventListener("click", (e) => {
+    if (suppressClick) { suppressClick = false; return; }
+    clickAt(e.clientX, e.clientY);
+  });
 
-window.addEventListener("keydown", (e) => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key === "Escape") { if (busy()) return; if (detail) leaveDetail(); else leaveFocus(); return; }
-  if (root.classList.contains("locked") && !detail?.isConnected && /^(Arrow|Page|Home|End| $)/.test(e.key)) { e.preventDefault(); interruptOpening(); }
-});
-
-// ---------- resize ----------
-let resizeQueued = false;
-window.addEventListener("resize", () => {
-  if (resizeQueued) return;
-  resizeQueued = true;
-  requestAnimationFrame(() => {
-    resizeQueued = false;
-    // Safari's toolbar collapsing while scrolling changes only the height: rescaling then would
-    // stop the native momentum and move the wall under the finger
-    if (coarse && phase === "free" && !zoomed && (bleed ? root.clientWidth : scroller.clientWidth) === vw) return;
-    // keep the wall point at the screen centre where it is
-    const oldK = k, cx = (sc.x + vw / 2 - wall.offsetLeft) / oldK, cy = (sc.y + vh / 2) / oldK;
-    // the name's size follows the width (--name-k) at once, not by its 1.8 s shrink transition
-    nameEl.style.transition = "none";
-    measure();
-    void getComputedStyle(nameEl).transform;
-    nameEl.style.transition = "";
-    if (phase === "waiting") { startOpening(); return; }
-    if (phase === "intro") { finishOpening(); }
-    sc.to(cx * k + wall.offsetLeft - vw / 2, cy * k - vh / 2);
-    if (zoomed) {
-      if (detail) { detail.remove(); detail = null; }
-      const z = zoomed;
-      still(z, () => placeFocused(z, peeking)); // a large frame is laid out again at the new size
+  // keyboard: arrows / page keys pan, Enter zooms the centred photo, Escape returns
+  window.addEventListener("keydown", (e) => {
+    if (stopped || e.metaKey || e.ctrlKey || e.altKey) return; // keep browser shortcuts (Cmd+Left is Back)
+    if (detail) { if (e.key === "Escape") leaveDetail(); return; } // arrows scroll the full-screen photo natively
+    const step = 90, page = vh * 0.8;
+    const keys: Record<string, [number, number]> = {
+      ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step],
+      PageUp: [0, -page], PageDown: [0, page],
+    };
+    if (keys[e.key]) { e.preventDefault(); if (!zoomed) { const [dx, dy] = keys[e.key]; panBy(dx, dy); } return; }
+    if (e.key === "Escape" && zoomed) { leaveZoom(); return; }
+    if (e.key === "Enter" && document.activeElement === canvas) {
+      e.preventDefault();
+      if (zoomed) { const c = toScreen(zoomed.item.x, zoomed.item.y); enterDetail(zoomed, c.x, c.y); } // no pointer: zoom on the photo's centre
+      else zoomTo(nearestToCentre());
     }
   });
-});
 
-// ---------- start ----------
-document.fonts.load('400 100px "Geist Serif"').catch(() => {}).finally(() => {
-  startOpening();
-  root.classList.add("ready");
-  // the caption's line height depends on the web font: re-measure once it has loaded
-  document.fonts.ready.then(() => { if (phase !== "intro") measure(); });
-});
+  // ---------- picking, hover, focus ----------
+  // As on the plain-DOM site: clicking a frame flies to it while every other frame drifts outward
+  // and fades (under a white veil), leaving the photo alone above its details. Scrolling does
+  // nothing there. Clicking the photo again opens it full screen in its own native scroller;
+  // clicking that, or anywhere off the photo, steps back. With the pointer off the photo (wide
+  // screens), the others edge back in at 20% and the photo gives way a little: the "peek".
+  const FOCUS_MS = 300, OTHERS_MS = 550, PEEK_MS = 400;
+  const ray = new THREE.Raycaster();
+  ray.layers.enableAll(); // the focused frame is drawn on its own layer
+  const ndc = new THREE.Vector2();
+  function pick(cx: number, cy: number): Hung | null {
+    ndc.set((cx / vw) * 2 - 1, -(cy / vh) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    const hit = ray.intersectObjects(hung.map((h) => h.hit), false)[0];
+    return hit ? hung[hit.object.userData.index] : null;
+  }
+  /** A tweened number: eases out over `dur` ms toward `to`. */
+  type Tween = { v: number; from: number; to: number; t0: number; dur: number };
+  const tween = (): Tween => ({ v: 0, from: 0, to: 0, t0: 0, dur: 1 });
+  function tweenTo(t: Tween, to: number, dur: number) {
+    Object.assign(t, { from: t.v, to, t0: performance.now(), dur: reduceMotion ? 0 : dur });
+    dirty = true;
+  }
+  function stepTween(t: Tween, now: number) {
+    if (t.v === t.to) return false;
+    const k = t.dur <= 0 ? 1 : Math.max(0, Math.min(1, (now - t.t0) / t.dur)); // rAF time can precede t0
+    t.v = k >= 1 ? t.to : t.from + (t.to - t.from) * (1 - Math.pow(1 - k, 3));
+    return true;
+  }
+  const focusMix = tween(); // 0 = the wall, 1 = one photo alone
+  const peekMix = tween(); // 1 = the pointer is off the focused photo
+  // the frame drawn over the veil: the focused one, and the last one while the others come back
+  let front: Hung | null = null;
+  function setFront(h: Hung | null) {
+    if (front === h) return;
+    const layer = (x: Hung, n: number) => { x.group.traverse((o) => o.layers.set(n)); x.shadow.layers.set(n); };
+    if (front) layer(front, 0);
+    front = h;
+    if (h) layer(h, 1);
+    dirty = true;
+  }
+  const veil = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }),
+  );
+  veil.scale.set((bounds.maxX - bounds.minX) * 8, (bounds.maxY - bounds.minY) * 8, 1);
+  veil.position.set((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2, 60); // over every frame, even pushed and lifted
+  veil.visible = false;
+  scene.add(veil);
+
+  let hovered: Hung | null = null;
+  let peeking = false;
+  /** `moved`: a real pointer move. The wall moving under a still pointer never starts a peek. */
+  function hoverAt(cx: number, cy: number, moved = true) {
+    const h = pick(cx, cy);
+    if (zoomed) {
+      const off = h !== zoomed;
+      canvas.style.cursor = off ? "zoom-out" : "zoom-in";
+      // phones have no hover peek; and it waits while a focus move runs
+      if (moved && desk && !detail && !anim && off !== peeking) { peeking = off; tweenTo(peekMix, off ? 1 : 0, PEEK_MS); }
+      return;
+    }
+    if (h === hovered) return;
+    if (hovered) hovered.liftTarget = 0;
+    hovered = h;
+    if (h && !reduceMotion) h.liftTarget = 6;
+    canvas.style.cursor = h ? "zoom-in" : "";
+    dirty = true;
+  }
+  canvas.addEventListener("pointerleave", () => {
+    mouse = null;
+    if (peeking) { peeking = false; tweenTo(peekMix, 0, PEEK_MS); }
+    if (hovered) { hovered.liftTarget = 0; hovered = null; dirty = true; }
+  });
+
+  function animateTo(to: { x?: number; y?: number; vis: number }, dur = 750) {
+    if (reduceMotion) {
+      view.vis = to.vis;
+      if (to.x !== undefined && to.y !== undefined) { view.x = raw.x = to.x; view.y = raw.y = to.y; }
+      else applyRaw();
+      dirty = true;
+      return;
+    }
+    anim = { from: { ...view }, to, t0: performance.now(), dur };
+  }
+
+  /** Camera view that fits a focused frame above the caption row, centred in that space. */
+  function zoomTarget(h: Hung) {
+    const t = Math.min(vw, vh) * 0.06;
+    const availH = Math.max(vh * 0.3, vh - t - reserveFocused - 12), availW = vw - t * 2;
+    const it = h.item;
+    const unitsPer = Math.max(it.outerH / availH, it.outerW / availW);
+    return { x: it.x, y: it.y - (vh / 2 - (t + availH / 2)) * unitsPer, vis: unitsPer * vh };
+  }
+
+  function zoomTo(h: Hung) {
+    introTo = null;
+    settle(true);
+    if (hovered) { hovered.liftTarget = 0; hovered = null; }
+    zoomed = h;
+    setFront(h);
+    momentum = null;
+    peeking = false;
+    tweenTo(peekMix, 0, 0);
+    animateTo(zoomTarget(h), FOCUS_MS);
+    tweenTo(focusMix, 1, OTHERS_MS);
+    showInfo(h);
+    document.documentElement.classList.add("zoomed");
+    canvas.style.cursor = "zoom-in";
+  }
+
+  function clickAt(cx: number, cy: number) {
+    if (detail) { if (!detail.isConnected) leaveDetail(); return; } // shown: the full-screen photo takes its own clicks
+    const h = pick(cx, cy);
+    if (zoomed) {
+      if (h === zoomed) enterDetail(h, cx, cy);
+      else leaveZoom();
+      return;
+    }
+    if (h) zoomTo(h);
+  }
+
+  /** Back to the wall where it was. */
+  function leaveZoom() {
+    if (!zoomed) return;
+    if (detail) { leaveDetail(); return; }
+    zoomed = null;
+    peeking = false;
+    tweenTo(peekMix, 0, PEEK_MS);
+    tweenTo(focusMix, 0, OTHERS_MS); // the front layer is dropped once the others are back
+    document.documentElement.classList.remove("zoomed");
+    canvas.style.cursor = "";
+    const L = limits(baseVis);
+    animateTo({
+      x: Math.min(L.maxX, Math.max(L.minX, view.x)),
+      y: Math.min(L.maxY, Math.max(L.minY, view.y)),
+      vis: baseVis,
+    }, FOCUS_MS);
+  }
+
+  // ---------- full screen ----------
+  // The camera flies in until the photo just covers the screen (aspect fill), then an HTML copy
+  // of the photo takes over in a native scroller, so it pans with the browser's own momentum.
+  const PHOTO_PLANE = PHOTO_Z - 0.2; // the print's height off the wall (wall.ts)
+  let detail: HTMLDivElement | null = null;
+  let renderVis = 1; // the camera's visible height at the wall, peek included
+  /** Wall units per css px at the print's plane, for the camera as last drawn. */
+  const photoUnitsPerPx = () => (renderVis - 2 * PHOTO_PLANE * tanHalf) / vh;
+  function toScreen(x: number, y: number) {
+    const u = photoUnitsPerPx();
+    return { x: vw / 2 + (x - camera.position.x) / u, y: vh / 2 - (y - camera.position.y) / u };
+  }
+  /** Camera view that shows the print `m` css px per wall unit, scrolled to (sl, st). */
+  function coverView(h: Hung, m: number, sl: number, st: number) {
+    const it = h.item, u = 1 / m;
+    return {
+      x: it.x - it.pw / 2 + (sl + vw / 2) * u,
+      y: it.y + it.ph / 2 - (st + vh / 2) * u,
+      vis: vh * u + 2 * PHOTO_PLANE * tanHalf,
+    };
+  }
+  function enterDetail(h: Hung, clickX: number, clickY: number) {
+    const it = h.item, u = photoUnitsPerPx();
+    const m = Math.max(vw / it.pw, vh / it.ph); // aspect fill: covers the screen, pans along the longer side
+    const W = it.pw * m, H = it.ph * m;
+    // keep the point under the pointer where it is
+    const fx = (camera.position.x + (clickX - vw / 2) * u - (it.x - it.pw / 2)) / it.pw;
+    const fy = (it.y + it.ph / 2 - (camera.position.y - (clickY - vh / 2) * u)) / it.ph;
+    const sl = Math.max(0, Math.min(W - vw, fx * W - clickX)), st = Math.max(0, Math.min(H - vh, fy * H - clickY));
+    peeking = false;
+    tweenTo(peekMix, 0, FOCUS_MS);
+    animateTo(coverView(h, m, sl, st), FOCUS_MS);
+    const d = document.createElement("div");
+    d.className = "detail";
+    d.tabIndex = -1; // focusable, so arrow keys scroll it
+    // the wall's print is the middle of its texture (the edges run under the mat): crop the same
+    const bl = photoBleed(it.photo.mat) / 2 * m;
+    const box = document.createElement("div");
+    box.style.cssText = `width:${W}px;height:${H}px;overflow:hidden`;
+    const img = new Image();
+    img.src = `${import.meta.env.BASE_URL}photos/${it.photo.file}`;
+    img.alt = "";
+    img.style.cssText = `width:${W + 2 * bl}px;height:${H + 2 * bl}px;margin:${-bl}px 0 0 ${-bl}px`;
+    box.append(img);
+    d.append(box);
+    d.addEventListener("click", leaveDetail);
+    detail = d;
+    // decoded first, so Safari does not show the overlay's low-resolution tiles while it paints.
+    // Until then the wall's own photo stays on screen; a failed image steps back instead.
+    const decoded = img.decode().then(() => true, () => img.naturalWidth > 0);
+    window.setTimeout(() => decoded.then((ok) => {
+      if (detail !== d) return;
+      if (!ok) { leaveDetail(); return; }
+      document.body.append(d);
+      d.scrollTo(sl, st);
+      d.focus({ preventScroll: true });
+    }), reduceMotion ? 0 : FOCUS_MS);
+  }
+  function leaveDetail() {
+    const d = detail, h = zoomed;
+    if (!d || !h) return;
+    detail = null;
+    if (d.isConnected) {
+      // put the camera on what the scroller shows, then fly back out
+      const m = d.scrollWidth / h.item.pw;
+      anim = null;
+      Object.assign(view, coverView(h, m, d.scrollLeft, d.scrollTop));
+      raw.x = view.x; raw.y = view.y;
+      dirty = true;
+      d.remove();
+    }
+    animateTo(zoomTarget(h), FOCUS_MS);
+    canvas.focus({ preventScroll: true });
+  }
+
+  // ---------- caption: photo details while zoomed ----------
+  const stop = (t: string) => (!t || /[.!?]$/.test(t) ? t : `${t}.`); // end a phrase with one period
+  function showInfo(h: Hung) {
+    // title / camera · stock / place, year, skipping whatever is not filled in yet
+    const p = h.item.photo;
+    const lines = [
+      p.title ? `<em>${p.title}</em>` : "",
+      [p.camera, p.film].filter(Boolean).map(stop).join(" "),
+      stop([p.place, p.year].filter(Boolean).join(", ")),
+    ].filter(Boolean);
+    photoInfo.innerHTML = lines.join("<br>");
+  }
+  function nearestToCentre(): Hung {
+    let best = hung[0], bd = Infinity;
+    for (const h of hung) {
+      const d = (h.item.x - view.x) ** 2 + (h.item.y - view.y) ** 2;
+      if (d < bd) { bd = d; best = h; }
+    }
+    return best;
+  }
+
+  // ---------- opening ----------
+  /** Resting view: centred on the opening photo (the swing) at the normal wall scale, above the bio. */
+  function restingView() {
+    const first = hung.find((h) => h.item.photo.file === openingPhoto) ?? hung[0];
+    const topPx = Math.min(vw, vh) * 0.06;
+    // centred in the space above the bottom row as it will be once the name has settled
+    const x = first.item.x, y = first.item.y - ((reserve(true) - topPx) / 2) * unitsPerPx(baseVis);
+    const L = limits(baseVis, true);
+    return { x: Math.min(L.maxX, Math.max(L.minX, x)), y: Math.min(L.maxY, Math.max(L.minY, y)), vis: baseVis };
+  }
+  /** The whole wall in the space above the bio. */
+  function wholeWallView() {
+    const topPx = Math.min(vw, vh) * 0.06;
+    const availH = Math.max(vh * 0.3, vh - topPx * 2 - reserveFull), availW = vw - topPx * 2;
+    const per = Math.max((bounds.maxX - bounds.minX) / availW, (bounds.maxY - bounds.minY) / availH);
+    return {
+      x: (bounds.minX + bounds.maxX) / 2,
+      y: (bounds.minY + bounds.maxY) / 2 - ((reserveFull - topPx) / 2) * per,
+      vis: per * vh,
+    };
+  }
+  /** Start on the whole wall; the frame loop zooms to the resting view once the photos are in. */
+  function setupOpening() {
+    const rest = restingView();
+    if (reduceMotion) { Object.assign(view, rest); introTo = null; settle(); }
+    else { Object.assign(view, wholeWallView()); introTo = rest; }
+    raw.x = view.x; raw.y = view.y;
+    dirty = true;
+  }
+
+  // ---------- drawing ----------
+  // Two passes: the wall and the veil, then the front frame over them (its own layer).
+  renderer.autoClear = false;
+  function draw() {
+    renderer.clear();
+    camera.layers.set(0);
+    renderer.render(scene, camera);
+    if (!front) return;
+    renderer.clearDepth();
+    camera.layers.set(1);
+    const bg = scene.background;
+    scene.background = null; // keep the first pass
+    renderer.render(scene, camera);
+    scene.background = bg;
+  }
+
+  // ---------- loop ----------
+  let last = performance.now();
+  function frame(now: number) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    let moved = false;
+
+    if (anim) {
+      if (anim.smooth && now >= anim.t0) settle(); // the name shrinks in step with the opening zoom
+      const k = Math.max(0, Math.min(1, (now - anim.t0) / anim.dur));
+      // the opening zoom eases in and out; everything else just eases out
+      const e = anim.smooth ? (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2) : 1 - Math.pow(1 - k, 3);
+      // zoom in log space so the scale changes at an even visual rate (linear vis crawls, then lurches)
+      view.vis = anim.from.vis * Math.pow(anim.to.vis / anim.from.vis, e);
+      if (anim.to.x !== undefined && anim.to.y !== undefined) {
+        view.x = raw.x = anim.from.x + (anim.to.x - anim.from.x) * e;
+        view.y = raw.y = anim.from.y + (anim.to.y - anim.from.y) * e;
+      } else applyRaw(); // zoom-out while the user keeps panning
+      if (k >= 1) anim = null; // land exactly
+      dirty = moved = true;
+    }
+    if (momentum && !anim) {
+      const decay = Math.exp(-dt * 3.2);
+      // move directly (not panBy, which would end a zoom)
+      const u = unitsPerPx();
+      raw.x += momentum.vx * dt * 60 * u;
+      raw.y -= momentum.vy * dt * 60 * u;
+      // a flick that reaches an edge stops dead on that axis
+      const L = limits();
+      if (raw.x >= L.maxX || raw.x <= L.minX) momentum.vx = 0;
+      if (raw.y >= L.maxY || raw.y <= L.minY) momentum.vy = 0;
+      clampRaw();
+      applyRaw();
+      momentum.vx *= decay; momentum.vy *= decay;
+      if (Math.hypot(momentum.vx, momentum.vy) < 0.05) momentum = null;
+      moved = true;
+    }
+    if (now - lastInput < 50) moved = true;
+
+    // focus: the others drift outward from the front frame and fade under the veil. They are
+    // placed by where they show on screen, as on the DOM site: the camera zooms to the photo, so
+    // they are pulled in and shrunk by the same zoom, or they would rush off the screen.
+    const fStep = stepTween(focusMix, now), pStep = stepTween(peekMix, now);
+    if (front && !zoomed && focusMix.v === 0 && focusMix.to === 0) {
+      setFront(null);
+      for (const h of hung) { h.dx = h.dy = 0; h.s = 1; }
+    }
+    if (fStep || pStep) {
+      const o = focusMix.v * (1 - 0.2 * peekMix.v);
+      (veil.material as THREE.MeshBasicMaterial).opacity = o;
+      veil.visible = o > 0.001;
+      dirty = true;
+    }
+    if (front && dirty) {
+      const mix = focusMix.v, r = view.vis / (1 - 0.035 * peekMix.v) / baseVis; // screen scale: wall / now
+      const fit = baseVis / zoomTarget(front).vis;
+      const push = (0.35 + (fit - 1) * 0.25) * (1 - 0.1 * peekMix.v);
+      const spread = 1 + ((1 + push) * r - 1) * mix, grow = 1 + (1.15 * r - 1) * mix;
+      for (const h of hung) {
+        const other = h !== front;
+        h.dx = other ? (h.item.x - front.item.x) * (spread - 1) : 0;
+        h.dy = other ? (h.item.y - front.item.y) * (spread - 1) : 0;
+        h.s = other ? grow : 1;
+      }
+    } else if (fStep && !front) for (const h of hung) { h.dx = h.dy = 0; h.s = 1; }
+
+    for (const h of hung) if (updateLift(h, dt)) dirty = true;
+
+    if (dirty) {
+      dirty = false;
+      // the peek shrinks the focused photo a little about its own centre
+      const pk = front ? 1 - 0.035 * peekMix.v : 1;
+      const fx = front ? front.item.x : view.x, fy = front ? front.item.y : view.y;
+      renderVis = view.vis / pk;
+      camera.position.set(fx - (fx - view.x) / pk, fy - (fy - view.y) / pk, renderVis / 2 / tanHalf);
+      camera.near = camera.position.z - 400; camera.far = camera.position.z + 50;
+      camera.updateProjectionMatrix();
+      // the wall moved under a still mouse: re-check what it is over
+      if (moved && mouse) hoverAt(mouse.x, mouse.y, false);
+      draw();
+      if (assetsReady && !shownWall) {
+        shownWall = true;
+        document.documentElement.classList.add("loaded");
+        // hold the overview while the wall fades in, then zoom to the resting view
+        if (introTo) { anim = { from: { ...view }, to: introTo, t0: now + 1100, dur: 1800, smooth: true }; introTo = null; }
+      }
+    }
+    if (!stopped) requestAnimationFrame(frame);
+  }
+
+  async function start() {
+    try { await document.fonts.load('400 100px "Geist Serif"'); } catch { /* falls back to Georgia */ }
+    resize();
+    setupOpening();
+    window.addEventListener("resize", queueResize);
+    // the caption's line height depends on the web font: re-measure once it has loaded
+    document.fonts.ready.then(queueResize);
+    document.documentElement.classList.add("ready");
+    if (!stopped) requestAnimationFrame(frame);
+  }
+  start().catch(showFallback);
+}

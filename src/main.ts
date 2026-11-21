@@ -4,6 +4,9 @@ import { layout } from "./layout";
 import { makeMaterials } from "./frames";
 import { hang, updateLift, photoBleed, PHOTO_Z, type Hung } from "./wall";
 
+/** A direction on screen: x right, y down, one of them 0. */
+type Dir = { x: number; y: number };
+
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const coarse = matchMedia("(pointer: coarse)").matches;
 const photoInfo = document.getElementById("photo-info")!;
@@ -84,7 +87,7 @@ function init() {
   scene.add(key);
   const fill = new THREE.HemisphereLight(0xffffff, 0xf0eeea, 0.45);
   scene.add(fill);
-  key.layers.enable(1); fill.layers.enable(1); // they light the focused frame's own layer too
+  for (const l of [key, fill]) for (const n of [1, 2, 3]) l.layers.enable(n); // they light the focused and leaving frames' own layers too
 
   const FOV = 14;
   const camera = new THREE.PerspectiveCamera(FOV, 1, 10, 20000);
@@ -236,7 +239,7 @@ function init() {
       return;
     }
     anim = null;
-    if (detail) { detail.remove(); detail = null; } // the full-screen photo was sized for the old window
+    if (detail) { removeOverlays(); detail = null; } // the full-screen photo was sized for the old window
     if (zoomed) Object.assign(view, zoomTarget(zoomed));
     else view.vis = baseVis;
     raw.x = view.x; raw.y = view.y;
@@ -297,12 +300,14 @@ function init() {
 
   // touch: one-finger swipe with momentum; a small slop so taps stay taps
   const SLOP = 8;
-  let touch: { id: number; x: number; y: number; t: number; vx: number; vy: number; moved: number; panning: boolean } | null = null;
+  const SWIPE = 50; // px sideways that counts as a swipe to the next photo
+  let touch: { id: number; sx: number; sy: number; x: number; y: number; t: number; vx: number; vy: number; moved: number; panning: boolean } | null = null;
   let suppressClick = false;
   let momentum: { vx: number; vy: number } | null = null;
   canvas.addEventListener("pointerdown", (e) => {
+    suppressClick = false; // a stale guard from an earlier swipe must not eat this click
     if (e.pointerType === "mouse") return;
-    touch = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0, moved: 0, panning: false };
+    touch = { id: e.pointerId, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0, moved: 0, panning: false };
     momentum = null;
     suppressClick = false;
     canvas.setPointerCapture(e.pointerId);
@@ -322,9 +327,24 @@ function init() {
     touch.panning = true;
     panBy(-dx, -dy);
   });
+  /** The way a swipe sends you (screen axes, y down), or null if it is too short or diagonal. */
+  function swipeDir(dx: number, dy: number): Dir | null {
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE) return null;
+    if (Math.abs(dx) > 1.5 * Math.abs(dy)) return { x: dx < 0 ? 1 : -1, y: 0 };
+    if (Math.abs(dy) > 1.5 * Math.abs(dx)) return { x: 0, y: dy < 0 ? 1 : -1 };
+    return null;
+  }
   const endTouch = (e: PointerEvent) => {
     if (!touch || e.pointerId !== touch.id) return;
     // taps arrive as the click event below
+    if (zoomed && !detail) {
+      // a focused photo: a swipe moves to the nearest photo the way the wall would come in (swipe
+      // left: the one to the right), as if dragging the wall; not on a cancelled touch
+      const d = swipeDir(e.clientX - touch.sx, e.clientY - touch.sy);
+      if (e.type === "pointerup" && d) seek(d);
+      touch = null;
+      return;
+    }
     if (!reduceMotion && touch.panning && performance.now() - touch.t < 80) momentum = { vx: touch.vx * 16, vy: touch.vy * 16 };
     touch = null;
   };
@@ -336,19 +356,68 @@ function init() {
   });
 
   // keyboard: arrows / page keys pan, Enter zooms the centred photo, Escape returns
+  // arrow keys held down, for the glide in the frame loop
+  const heldKeys = new Set<string>();
+  let pageAnim: object | null = null; // the running Page Up / Down glide, if any
+  const keyVel = { x: 0, y: 0 }; // css px / s
+  const KEY_SPEED = 1100;
+  // macOS sends no keyup for an arrow released while Cmd is down: a modifier, a blur or a hidden
+  // tab drops every held arrow, so the glide can never run on by itself
+  window.addEventListener("keyup", (e) => { if (e.key === "Meta" || e.key === "Control" || e.key === "Alt") heldKeys.clear(); else heldKeys.delete(e.key); });
+  window.addEventListener("blur", () => heldKeys.clear());
+  document.addEventListener("visibilitychange", () => heldKeys.clear());
   window.addEventListener("keydown", (e) => {
-    if (stopped || e.metaKey || e.ctrlKey || e.altKey) return; // keep browser shortcuts (Cmd+Left is Back)
-    if (detail) { if (e.key === "Escape") leaveDetail(); return; } // arrows scroll the full-screen photo natively
-    const step = 90, page = vh * 0.8;
-    const keys: Record<string, [number, number]> = {
-      ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step],
-      PageUp: [0, -page], PageDown: [0, page],
-    };
-    if (keys[e.key]) { e.preventDefault(); if (!zoomed) { const [dx, dy] = keys[e.key]; panBy(dx, dy); } return; }
+    if (stopped) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) { heldKeys.clear(); return; } // keep browser shortcuts (Cmd+Left is Back)
+    const arrow: Record<string, Dir> = { ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }, ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 } };
+    if (zoomed && arrow[e.key]) {
+      const dir = arrow[e.key];
+      // full screen: the arrow pans the photo natively until it reaches that edge, then seeks
+      if (detail?.isConnected && !atEdge(detail, dir.x, dir.y)) return;
+      e.preventDefault();
+      if (!e.repeat) seek(dir); // a held key moves one photo, not a stream of them
+      return;
+    }
+    if (detail) {
+      if (e.key === "Escape") leaveDetail();
+      if (e.key === " ") e.preventDefault(); // already all the way in (and no page-down scroll)
+      return;
+    }
+    if (e.key.startsWith("Arrow")) {
+      // held arrows glide (see the frame loop), they do not step
+      e.preventDefault();
+      if (!zoomed) {
+        if (anim && anim === pageAnim) anim = null; // a Page Up / Down glide: the arrows take over
+        heldKeys.add(e.key);
+        dirty = true;
+      }
+      return;
+    }
+    if (e.key === "PageUp" || e.key === "PageDown") {
+      e.preventDefault();
+      if (zoomed) return;
+      // a screen at a time, eased; a held key continues from the last target, not from mid-flight
+      if (anim?.smooth || introTo) panBy(0, 0); // the opening: settle the name and the scale first, as a pan does
+      const from = anim && anim.to.y !== undefined ? anim.to.y : view.y;
+      const L = limits(baseVis), dy = (e.key === "PageDown" ? 1 : -1) * vh * 0.8 * unitsPerPx(baseVis);
+      raw.x = view.x;
+      animateTo({ x: Math.min(L.maxX, Math.max(L.minX, view.x)), y: Math.min(L.maxY, Math.max(L.minY, from - dy)), vis: baseVis }, 420);
+      pageAnim = anim;
+      return;
+    }
     if (e.key === "Escape" && zoomed) { leaveZoom(); return; }
+    if (e.key === " " && (e.target === canvas || e.target === document.body)) { // not on a link or a field
+      e.preventDefault(); // not the browser's page scroll
+      // Space moves in a level (wall -> focused -> full screen), Escape backs out
+      if (!e.repeat) {
+        if (!zoomed) zoomTo(nearestToCentre()); // the photo nearest the middle of the screen
+        else enterDetail(zoomed, vw / 2, vh / 2, false);
+      }
+      return;
+    }
     if (e.key === "Enter" && document.activeElement === canvas) {
       e.preventDefault();
-      if (zoomed) { const c = toScreen(zoomed.item.x, zoomed.item.y); enterDetail(zoomed, c.x, c.y); } // no pointer: zoom on the photo's centre
+      if (zoomed) enterDetail(zoomed, vw / 2, vh / 2, false); // no pointer: open on the photo's centre
       else zoomTo(nearestToCentre());
     }
   });
@@ -386,13 +455,35 @@ function init() {
   const peekMix = tween(); // 1 = the pointer is off the focused photo
   // the frame drawn over the veil: the focused one, and the last one while the others come back
   let front: Hung | null = null;
+  // Photos left by an arrow key: each on its own layer (2 or 3) between the veil and the front
+  // frame, drifting out like the others and fading under a veil of its own (mix 1 -> 0). Two at
+  // most, so a quick second press lets the first finish fading.
+  type Leaver = { h: Hung; mix: Tween; n: 2 | 3 };
+  let leavers: Leaver[] = [];
+  const leaverOf = (h: Hung) => leavers.find((l) => l.h === h);
+  const layer = (x: Hung, n: number) => { x.group.traverse((o) => o.layers.set(n)); x.shadow.layers.set(n); };
   function setFront(h: Hung | null) {
     if (front === h) return;
-    const layer = (x: Hung, n: number) => { x.group.traverse((o) => o.layers.set(n)); x.shadow.layers.set(n); };
-    if (front) layer(front, 0);
+    if (front && !leaverOf(front)) layer(front, 0);
     front = h;
-    if (h) layer(h, 1);
+    if (h) { leavers = leavers.filter((l) => l.h !== h); layer(h, 1); } // a photo coming back stops leaving
     dirty = true;
+  }
+  function dropLeaver(l: Leaver) {
+    leavers = leavers.filter((x) => x !== l);
+    if (l.h !== front) layer(l.h, 0);
+    leaveVeils[l.n].visible = false;
+    dirty = true;
+  }
+  const dropLeaving = () => [...leavers].forEach(dropLeaver);
+  function addLeaver(h: Hung) {
+    if (leavers.length === 2) dropLeaver(leavers[0]);
+    const n: 2 | 3 = leavers[0]?.n === 2 ? 3 : 2;
+    const mix = tween();
+    mix.v = 1;
+    tweenTo(mix, 0, OTHERS_MS);
+    leavers.push({ h, mix, n });
+    layer(h, n);
   }
   const veil = new THREE.Mesh(
     new THREE.PlaneGeometry(1, 1),
@@ -402,6 +493,14 @@ function init() {
   veil.position.set((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2, 60); // over every frame, even pushed and lifted
   veil.visible = false;
   scene.add(veil);
+  const leaveVeils: Record<number, THREE.Mesh> = {};
+  for (const n of [2, 3]) {
+    const v = veil.clone();
+    v.material = (veil.material as THREE.MeshBasicMaterial).clone();
+    v.layers.set(n);
+    scene.add(v);
+    leaveVeils[n] = v;
+  }
 
   let hovered: Hung | null = null;
   let peeking = false;
@@ -501,10 +600,7 @@ function init() {
   let renderVis = 1; // the camera's visible height at the wall, peek included
   /** Wall units per css px at the print's plane, for the camera as last drawn. */
   const photoUnitsPerPx = () => (renderVis - 2 * PHOTO_PLANE * tanHalf) / vh;
-  function toScreen(x: number, y: number) {
-    const u = photoUnitsPerPx();
-    return { x: vw / 2 + (x - camera.position.x) / u, y: vh / 2 - (y - camera.position.y) / u };
-  }
+
   /** Camera view that shows the print `m` css px per wall unit, scrolled to (sl, st). */
   function coverView(h: Hung, m: number, sl: number, st: number) {
     const it = h.item, u = 1 / m;
@@ -514,17 +610,93 @@ function init() {
       vis: vh * u + 2 * PHOTO_PLANE * tanHalf,
     };
   }
-  function enterDetail(h: Hung, clickX: number, clickY: number) {
-    const it = h.item, u = photoUnitsPerPx();
-    const m = Math.max(vw / it.pw, vh / it.ph); // aspect fill: covers the screen, pans along the longer side
-    const W = it.pw * m, H = it.ph * m;
-    // keep the point under the pointer where it is
-    const fx = (camera.position.x + (clickX - vw / 2) * u - (it.x - it.pw / 2)) / it.pw;
-    const fy = (it.y + it.ph / 2 - (camera.position.y - (clickY - vh / 2) * u)) / it.ph;
-    const sl = Math.max(0, Math.min(W - vw, fx * W - clickX)), st = Math.max(0, Math.min(H - vh, fy * H - clickY));
-    peeking = false;
-    tweenTo(peekMix, 0, FOCUS_MS);
-    animateTo(coverView(h, m, sl, st), FOCUS_MS);
+  // ---------- seeking ----------
+  // An arrow key (or a swipe) on a focused or full-screen photo moves to its nearest neighbour in
+  // that direction on the wall.
+  const SEEK_MS = 450;
+  let incoming: HTMLDivElement | null = null; // full screen: the next photo, decoding before it slides in
+  let slideUntil = 0;
+  /** The nearest frame from `f` in screen direction `d` (y down): centre distance along that way,
+   *  with distance to the side costing 2.5 times as much, inside a cone of about 56 degrees. The
+   *  opposite key right after a move goes straight back. */
+  let lastSeek: { from: Hung; to: Hung; dir: Dir } | null = null;
+  function neighbour(f: Hung, d: Dir): Hung | null {
+    if (lastSeek && lastSeek.to === f && lastSeek.dir.x === -d.x && lastSeek.dir.y === -d.y) return lastSeek.from;
+    const a = f.item;
+    let best: Hung | null = null, bs = Infinity;
+    for (const h of hung) {
+      if (h === f) continue;
+      const rx = h.item.x - a.x, ry = -(h.item.y - a.y); // screen axes
+      const along = rx * d.x + ry * d.y, side = Math.abs(rx * d.y - ry * d.x);
+      if (along <= 0 || side > along * 1.5) continue; // not that way
+      const score = along + 2.5 * side;
+      if (score < bs) { bs = score; best = h; }
+    }
+    return best;
+  }
+  function seek(dir: Dir) {
+    if (!zoomed) return;
+    if (detail) {
+      // one slide at a time, and only once the current photo is on screen
+      if (detail.isConnected && !incoming && performance.now() >= slideUntil) seekDetail(dir);
+      return;
+    }
+    const next = neighbour(zoomed, dir);
+    if (!next) return; // the edge of the wall
+    const prev = zoomed;
+    lastSeek = { from: prev, to: next, dir };
+    zoomed = next;
+    setFront(next);
+    addLeaver(prev);
+    showInfo(next);
+    animateTo(zoomTarget(next), SEEK_MS); // the camera flies along the wall; both photos ride over the veil
+  }
+  /** Full screen: the next photo slides in over the last one, as in a photo viewer. Nothing
+   *  changes until it has decoded; if it fails, the current photo simply stays. */
+  function seekDetail(dir: Dir) {
+    const old = detail!, next = neighbour(zoomed!, dir);
+    if (!next) return;
+    const m = coverScale(next), W = next.item.pw * m, H = next.item.ph * m;
+    const sl = (W - vw) / 2, st = (H - vh) / 2;
+    const { d, ready } = makeDetail(next, m);
+    incoming = d;
+    const slide = reduceMotion ? 0 : SEEK_MS;
+    const off = (k: number) => `translate(${dir.x * k * 100}%, ${dir.y * k * 100}%)`;
+    d.style.transform = off(1);
+    d.style.transition = `transform ${slide}ms cubic-bezier(0.2, 0.8, 0.2, 1)`;
+    showWhenReady(d, ready, () => incoming === d, sl, st, () => {
+      incoming = null;
+      detail = d;
+      zoomed = next;
+      setFront(next);
+      showInfo(next);
+      // the camera waits behind the overlay on the new photo, ready for the way back out
+      anim = null;
+      Object.assign(view, coverView(next, m, sl, st));
+      raw.x = view.x; raw.y = view.y;
+      dirty = true;
+      void d.offsetWidth; // start from off screen
+      d.style.transform = "";
+      old.style.transition = d.style.transition;
+      old.style.transform = off(-1);
+      slideUntil = performance.now() + slide;
+      window.setTimeout(() => { old.remove(); d.style.transition = ""; }, slide);
+    }, () => { incoming = null; });
+  }
+  /** The full-screen scroller is already at its edge in that direction (or cannot scroll that way). */
+  function atEdge(d: HTMLElement, x: number, y: number) {
+    const mx = d.scrollWidth - d.clientWidth, my = d.scrollHeight - d.clientHeight;
+    if (x > 0) return d.scrollLeft >= mx - 1;
+    if (x < 0) return d.scrollLeft <= 1;
+    if (y > 0) return d.scrollTop >= my - 1;
+    return d.scrollTop <= 1;
+  }
+
+  const coverScale = (h: Hung) => Math.max(vw / h.item.pw, vh / h.item.ph); // aspect fill
+  /** The full-screen photo: a native scroller holding the print at `m` px per wall unit. Its
+   *  decode starts at once; `ready` is false if the image failed. */
+  function makeDetail(h: Hung, m: number) {
+    const it = h.item, W = it.pw * m, H = it.ph * m;
     const d = document.createElement("div");
     d.className = "detail";
     d.tabIndex = -1; // focusable, so arrow keys scroll it
@@ -539,17 +711,61 @@ function init() {
     box.append(img);
     d.append(box);
     d.addEventListener("click", leaveDetail);
-    detail = d;
-    // decoded first, so Safari does not show the overlay's low-resolution tiles while it paints.
-    // Until then the wall's own photo stays on screen; a failed image steps back instead.
-    const decoded = img.decode().then(() => true, () => img.naturalWidth > 0);
-    window.setTimeout(() => decoded.then((ok) => {
-      if (detail !== d) return;
-      if (!ok) { leaveDetail(); return; }
+    // phones: a swipe that starts with the photo already scrolled to that edge seeks that way
+    let start: { x: number; y: number; edge: (x: number, y: number) => boolean } | null = null;
+    d.addEventListener("touchstart", (e) => {
+      const t = e.touches[0];
+      // which edges it was at when the finger went down (a pan that reaches an edge does not seek)
+      const at = { r: atEdge(d, 1, 0), l: atEdge(d, -1, 0), b: atEdge(d, 0, 1), t: atEdge(d, 0, -1) };
+      const edge = (x: number, y: number) => (x > 0 ? at.r : x < 0 ? at.l : y > 0 ? at.b : at.t);
+      start = e.touches.length === 1 ? { x: t.clientX, y: t.clientY, edge } : null; // not a pinch
+    }, { passive: true });
+    d.addEventListener("touchcancel", () => { start = null; }, { passive: true });
+    d.addEventListener("touchend", (e) => {
+      const t = e.changedTouches[0];
+      if (!start || detail !== d) return;
+      const dir = swipeDir(t.clientX - start.x, t.clientY - start.y);
+      if (dir && start.edge(dir.x, dir.y)) seek(dir);
+      start = null;
+    }, { passive: true });
+    const ready = img.decode().then(() => true, () => img.naturalWidth > 0);
+    return { d, ready };
+  }
+  /** Put an overlay on screen once its photo is decoded (Safari would show low-resolution tiles
+   *  while it paints), if it is still wanted. */
+  function showWhenReady(d: HTMLDivElement, ready: Promise<boolean>, wanted: () => boolean, sl: number, st: number, shown?: () => void, failed?: () => void) {
+    ready.then((ok) => {
+      if (!wanted()) return;
+      if (!ok) { failed?.(); return; }
       document.body.append(d);
       d.scrollTo(sl, st);
       d.focus({ preventScroll: true });
-    }), reduceMotion ? 0 : FOCUS_MS);
+      shown?.();
+    });
+  }
+  /** Every full-screen overlay, including one still sliding out or still decoding. */
+  function removeOverlays() {
+    incoming = null;
+    document.querySelectorAll(".detail").forEach((x) => x.remove());
+  }
+
+  /** With a click: keep the point under the pointer where it is. From the keyboard (no point):
+   *  open on the photo's centre, whatever the camera is doing. */
+  function enterDetail(h: Hung, clickX = vw / 2, clickY = vh / 2, fromClick = true) {
+    const it = h.item, u = photoUnitsPerPx();
+    const m = coverScale(h); // aspect fill: covers the screen, pans along the longer side
+    const W = it.pw * m, H = it.ph * m;
+    const fx = fromClick ? (camera.position.x + (clickX - vw / 2) * u - (it.x - it.pw / 2)) / it.pw : 0.5;
+    const fy = fromClick ? (it.y + it.ph / 2 - (camera.position.y - (clickY - vh / 2) * u)) / it.ph : 0.5;
+    const sl = Math.max(0, Math.min(W - vw, fx * W - clickX)), st = Math.max(0, Math.min(H - vh, fy * H - clickY));
+    peeking = false;
+    tweenTo(peekMix, 0, FOCUS_MS);
+    dropLeaving();
+    animateTo(coverView(h, m, sl, st), FOCUS_MS);
+    const { d, ready } = makeDetail(h, m); // decodes during the flight
+    detail = d;
+    // until it shows, the wall's own photo stays; a failed image steps back
+    window.setTimeout(() => showWhenReady(d, ready, () => detail === d, sl, st, undefined, leaveDetail), reduceMotion ? 0 : FOCUS_MS);
   }
   function leaveDetail() {
     const d = detail, h = zoomed;
@@ -562,8 +778,8 @@ function init() {
       Object.assign(view, coverView(h, m, d.scrollLeft, d.scrollTop));
       raw.x = view.x; raw.y = view.y;
       dirty = true;
-      d.remove();
     }
+    removeOverlays();
     animateTo(zoomTarget(h), FOCUS_MS);
     canvas.focus({ preventScroll: true });
   }
@@ -581,9 +797,11 @@ function init() {
     photoInfo.innerHTML = lines.join("<br>");
   }
   function nearestToCentre(): Hung {
+    // the middle of the wall in view: above the name and bio that cover the bottom
+    const cy = view.y + (reserve() / 2) * unitsPerPx();
     let best = hung[0], bd = Infinity;
     for (const h of hung) {
-      const d = (h.item.x - view.x) ** 2 + (h.item.y - view.y) ** 2;
+      const d = (h.item.x - view.x) ** 2 + (h.item.y - cy) ** 2;
       if (d < bd) { bd = d; best = h; }
     }
     return best;
@@ -627,11 +845,13 @@ function init() {
     camera.layers.set(0);
     renderer.render(scene, camera);
     if (!front) return;
-    renderer.clearDepth();
-    camera.layers.set(1);
     const bg = scene.background;
     scene.background = null; // keep the first pass
-    renderer.render(scene, camera);
+    for (const n of [...leavers.map((l) => l.n), 1]) { // the oldest leaving photo first
+      renderer.clearDepth();
+      camera.layers.set(n);
+      renderer.render(scene, camera);
+    }
     scene.background = bg;
   }
 
@@ -672,12 +892,32 @@ function init() {
       if (Math.hypot(momentum.vx, momentum.vy) < 0.05) momentum = null;
       moved = true;
     }
+    // arrow keys: ease up to a steady glide while held, and ease to a stop on release
+    if (zoomed) heldKeys.clear();
+    if (heldKeys.size || keyVel.x || keyVel.y) {
+      const tx = (heldKeys.has("ArrowRight") ? 1 : 0) - (heldKeys.has("ArrowLeft") ? 1 : 0);
+      const ty = (heldKeys.has("ArrowDown") ? 1 : 0) - (heldKeys.has("ArrowUp") ? 1 : 0);
+      const ease = (v: number, t: number) => {
+        const k = 1 - Math.exp(-dt / (t ? 0.09 : 0.14)); // speeds up a little quicker than it stops
+        const nv = v + (t * KEY_SPEED - v) * k;
+        return !t && Math.abs(nv) < 8 ? 0 : nv;
+      };
+      keyVel.x = ease(keyVel.x, tx); keyVel.y = ease(keyVel.y, ty);
+      if (keyVel.x || keyVel.y) { panBy(keyVel.x * dt, keyVel.y * dt); moved = true; dirty = true; }
+    }
     if (now - lastInput < 50) moved = true;
 
     // focus: the others drift outward from the front frame and fade under the veil. They are
     // placed by where they show on screen, as on the DOM site: the camera zooms to the photo, so
     // they are pulled in and shrunk by the same zoom, or they would rush off the screen.
     const fStep = stepTween(focusMix, now), pStep = stepTween(peekMix, now);
+    for (const l of [...leavers]) {
+      if (!stepTween(l.mix, now)) continue;
+      (leaveVeils[l.n].material as THREE.MeshBasicMaterial).opacity = 1 - l.mix.v;
+      leaveVeils[l.n].visible = true;
+      dirty = true;
+      if (l.mix.v === 0) dropLeaver(l); // gone under the veil: back with the others
+    }
     if (front && !zoomed && focusMix.v === 0 && focusMix.to === 0) {
       setFront(null);
       for (const h of hung) { h.dx = h.dy = 0; h.s = 1; }
@@ -694,10 +934,12 @@ function init() {
       const push = (0.35 + (fit - 1) * 0.25) * (1 - 0.1 * peekMix.v);
       const spread = 1 + ((1 + push) * r - 1) * mix, grow = 1 + (1.15 * r - 1) * mix;
       for (const h of hung) {
-        const other = h !== front;
-        h.dx = other ? (h.item.x - front.item.x) * (spread - 1) : 0;
-        h.dy = other ? (h.item.y - front.item.y) * (spread - 1) : 0;
-        h.s = other ? grow : 1;
+        // the leaving photo eases from where it was focused out to where the others are
+        const l = leaverOf(h);
+        const k = h === front ? 0 : l ? 1 - l.mix.v : 1;
+        h.dx = (h.item.x - front.item.x) * (spread - 1) * k;
+        h.dy = (h.item.y - front.item.y) * (spread - 1) * k;
+        h.s = 1 + (grow - 1) * k;
       }
     } else if (fStep && !front) for (const h of hung) { h.dx = h.dy = 0; h.s = 1; }
 
@@ -737,3 +979,4 @@ function init() {
   }
   start().catch(showFallback);
 }
+

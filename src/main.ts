@@ -169,6 +169,10 @@ function init() {
     resizeQueued = true;
     requestAnimationFrame(() => {
       resizeQueued = false;
+      // iOS reports a pinch-zoom (and the toolbar sliding) as a resize. With the full-screen photo
+      // open, only a real change of the page's width (a rotation, a window resize) rebuilds it;
+      // otherwise the pinch would drop back to the focused photo.
+      if (detail && document.documentElement.clientWidth === detailLayoutW) return;
       // the corner name's size follows --name-k at once, not by its 1.8 s shrink transition
       const name = document.querySelector<SVGElement>(".name")!, root = document.documentElement.style;
       const before = root.getPropertyValue("--name-k");
@@ -288,7 +292,7 @@ function init() {
   }
 
   window.addEventListener("wheel", (e) => {
-    if (stopped || e.ctrlKey) return; // the fallback gallery scrolls natively; pinch / ctrl+scroll stays browser zoom
+    if (stopped || e.ctrlKey) return; // the fallback gallery scrolls natively; pinch / ctrl+scroll: browser zoom, or the full-screen photo's own
     if (detail) {
       // the full-screen photo pans natively; at its edge a sideways scroll would become the
       // browser's back / forward swipe, so it stops there
@@ -602,6 +606,7 @@ function init() {
   // of the photo takes over in a native scroller, so it pans with the browser's own momentum.
   const PHOTO_PLANE = PHOTO_Z - 0.2; // the print's height off the wall (wall.ts)
   let detail: HTMLDivElement | null = null;
+  let detailLayoutW = 0; // the page width when full screen opened (see queueResize)
   let renderVis = 1; // the camera's visible height at the wall, peek included
   /** Wall units per css px at the print's plane, for the camera as last drawn. */
   const photoUnitsPerPx = () => (renderVis - 2 * PHOTO_PLANE * tanHalf) / vh;
@@ -669,17 +674,95 @@ function init() {
     // the wall's print is the middle of its texture (the edges run under the mat): crop the same
     const bl = photoBleed(it.photo.mat) / 2 * m;
     const box = document.createElement("div");
-    box.style.cssText = `width:${W}px;height:${H}px;overflow:hidden`;
     const img = new Image();
     img.src = `${import.meta.env.BASE_URL}photos/${it.photo.file}`;
     img.alt = "";
-    img.style.cssText = `width:${W + 2 * bl}px;height:${H + 2 * bl}px;margin:${-bl}px 0 0 ${-bl}px`;
     box.append(img);
     d.append(box);
-    d.addEventListener("click", leaveDetail);
+
+    // Pinch zoom is the page's own, not the browser's: the browser zooms the whole page and its
+    // fixed layers, and jumped when the fingers lifted. Here the photo itself grows inside the
+    // native scroller, about the point between the fingers, so lifting changes nothing.
+    let z = 1; // 1 = just covers the screen
+    const size = () => {
+      box.style.cssText = `width:${W * z}px;height:${H * z}px;overflow:hidden`;
+      img.style.cssText = `width:${(W + 2 * bl) * z}px;height:${(H + 2 * bl) * z}px;margin:${-bl * z}px 0 0 ${-bl * z}px`;
+    };
+    size();
+    /** Zoom to `nz`, keeping the photo point (fx, fy) (fractions of the photo) under screen point (cx, cy). */
+    const apply = (nz: number, fx: number, fy: number, cx: number, cy: number) => {
+      z = Math.min(4, Math.max(1, nz));
+      size();
+      d.scrollLeft = fx * W * z - cx;
+      d.scrollTop = fy * H * z - cy;
+    };
+    // at most one layout per frame, however many touch events arrive
+    let pending: Parameters<typeof apply> | null = null;
+    let zt = 1; // the zoom asked for, ahead of the frame that applies it
+    const zoomAt = (...a: Parameters<typeof apply>) => {
+      zt = a[0] = Math.min(4, Math.max(1, a[0]));
+      if (!pending) requestAnimationFrame(() => { if (pending) apply(...pending); pending = null; });
+      pending = a;
+    };
+    const fracAt = (cx: number, cy: number) => ({ fx: (d.scrollLeft + cx) / (W * z), fy: (d.scrollTop + cy) / (H * z) });
+    let pinch: { dist: number; z: number; fx: number; fy: number } | null = null;
+    const two = (e: TouchEvent) => {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      return { dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), cx: (a.clientX + b.clientX) / 2, cy: (a.clientY + b.clientY) / 2 };
+    };
+    // a tap steps back out, but a pinch is not a tap: iOS can send a click when two fingers lift
+    let multi = false, multiUntil = 0;
+    d.addEventListener("touchstart", (e) => {
+      if (e.touches.length < 2) return;
+      multi = true;
+      const t = two(e);
+      pinch = { dist: Math.max(1, t.dist), z: zt, ...fracAt(t.cx, t.cy) };
+      d.style.overflow = "hidden"; // stops a one-finger scroll or momentum already running, which would fight the pinch
+    }, { passive: true });
+    d.addEventListener("touchmove", (e) => {
+      if (!pinch || e.touches.length < 2) return;
+      if (e.cancelable) e.preventDefault(); // the photo zooms; the page does not scroll or zoom
+      const t = two(e);
+      zoomAt(pinch.z * (t.dist / pinch.dist), pinch.fx, pinch.fy, t.cx, t.cy); // moving both fingers pans too
+    }, { passive: false });
+    const lift = (e: TouchEvent) => {
+      if (e.touches.length < 2 && pinch) { pinch = null; d.style.overflow = ""; }
+      if (multi && !e.touches.length) { multi = false; multiUntil = performance.now() + 450; }
+    };
+    d.addEventListener("touchend", lift, { passive: true });
+    d.addEventListener("touchcancel", lift, { passive: true }); // iOS may end a gesture this way
+    // Safari: a trackpad pinch arrives as gesture events (iOS also sends them for a touch pinch,
+    // which the touch handlers above already zoom, so they are skipped then)
+    type Gesture = Event & { scale: number; clientX: number; clientY: number };
+    let gesture: { z: number; fx: number; fy: number } | null = null;
+    d.addEventListener("gesturestart", (e) => {
+      e.preventDefault(); // never the browser's own page zoom
+      const g = e as Gesture;
+      gesture = pinch ? null : { z: zt, ...fracAt(g.clientX, g.clientY) };
+    });
+    d.addEventListener("gesturechange", (e) => {
+      e.preventDefault();
+      const g = e as Gesture;
+      if (gesture && !pinch) zoomAt(gesture.z * g.scale, gesture.fx, gesture.fy, g.clientX, g.clientY);
+    });
+    d.addEventListener("gestureend", () => { gesture = null; });
+    // other browsers: a trackpad pinch (or ctrl + mouse wheel) is a wheel event with ctrlKey
+    d.addEventListener("wheel", (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY; // lines -> px
+      const k = Math.min(1.25, Math.max(0.8, Math.exp(-dy * 0.01))); // a mouse-wheel notch zooms a step, not a leap
+      const f = fracAt(e.clientX, e.clientY);
+      zoomAt(zt * k, f.fx, f.fy, e.clientX, e.clientY);
+    }, { passive: false });
+    d.addEventListener("click", () => {
+      if (multi || performance.now() < multiUntil) return;
+      leaveDetail();
+    });
     const ready = img.decode().then(() => true, () => img.naturalWidth > 0);
     return { d, ready };
   }
+
   /** Put an overlay on screen once its photo is decoded (Safari would show low-resolution tiles
    *  while it paints), if it is still wanted. */
   function showWhenReady(d: HTMLDivElement, ready: Promise<boolean>, wanted: () => boolean, sl: number, st: number, failed?: () => void) {
@@ -711,6 +794,7 @@ function init() {
     animateTo(coverView(h, m, sl, st), FOCUS_MS);
     const { d, ready } = makeDetail(h, m); // decodes during the flight
     detail = d;
+    detailLayoutW = document.documentElement.clientWidth;
     // until it shows, the wall's own photo stays; a failed image steps back
     window.setTimeout(() => showWhenReady(d, ready, () => detail === d, sl, st, leaveDetail), reduceMotion ? 0 : FOCUS_MS);
   }
@@ -718,7 +802,11 @@ function init() {
     const d = detail, h = zoomed;
     if (!d || !h) return;
     detail = null;
-    if (d.isConnected) {
+    // a height change was not applied while full screen was open (see queueResize): apply it now,
+    // and skip the hand-over from the scroller, which was measured at the old size
+    const resized = window.innerWidth !== vw || window.innerHeight !== vh;
+    if (resized) queueResize();
+    else if (d.isConnected) {
       // put the camera on what the scroller shows, then fly back out
       const m = d.scrollWidth / h.item.pw;
       anim = null;
